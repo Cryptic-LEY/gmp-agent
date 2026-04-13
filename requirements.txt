@@ -1,0 +1,12 @@
+pdfplumber==0.11.0
+pypdf==4.0.0
+langchain==0.3.0
+langchain-community==0.3.0
+openai==1.0.0
+chromadb==0.5.0
+networkx==3.3
+streamlit==1.38.0
+pandas==2.2.0
+pyyaml==6.0.1
+python-dotenv==1.0.0
+requests==2.32.0

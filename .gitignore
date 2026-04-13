@@ -1,0 +1,17 @@
+.env
+.env.local
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+data/raw/
+*.pdf
+*.sqlite
+*.db
+data/chroma/
+.DS_Store
+Thumbs.db
+logs/
+*.log
+.idea/
