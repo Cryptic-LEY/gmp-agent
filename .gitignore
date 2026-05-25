@@ -1,0 +1,105 @@
+# ── Python ──────────────────────────────────────────────
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+gmp-env/
+*.egg-info/
+
+# ── 数据库文件（含真实用户数据，不上传）──────────────────
+*.db
+*.db-shm
+*.db-wal
+*.db.zip
+*.zip
+identifier.sqlite
+
+# ── 环境变量 / 密钥（绝对不能上传）──────────────────────
+.env
+.env.*
+gmp-web/.env.local
+
+# ── 教材原文 / 版权文件（不上传）────────────────────────
+*.docx
+*.docm
+*.doc
+*.pdf
+*.pptx
+*.xlsx
+*.xls
+*.wps
+~$*
+
+# ── 缺陷项原始文件（政府内部报告，不上传）────────────────
+缺陷项文件/
+
+# ── 临时转换文件 ──────────────────────────────────────────
+tmp_converted/
+tmp_d_level/
+
+# ── Node.js ──────────────────────────────────────────────
+node_modules/
+package-lock.json
+
+# ── Next.js ──────────────────────────────────────────────
+gmp-web/.next/
+gmp-web/out/
+gmp-web/build/
+gmp-web/*.tsbuildinfo
+gmp-web/next-env.d.ts
+
+# ── 系统 / IDE ────────────────────────────────────────────
+.DS_Store
+.idea/
+.vscode/
+Thumbs.db
+
+# ── Claude Code 本地配置（不上传）────────────────────────
+.claude/
+
+# ── 日志文件 ──────────────────────────────────────────────
+kp_link_log.txt
+verify_out.txt
+
+# ── 根目录脚本与个人文档（本地使用，不上传）──────────────
+build_*.py
+check_*.py
+clean_*.py
+compare_*.py
+create_*.py
+diag.py
+enhance_*.py
+enrich_*.py
+extract_*.py
+fill_*.py
+fix_*.py
+import_*.py
+link_*.py
+match_*.py
+merge_*.py
+rebuild_*.py
+update_*.py
+write_*.py
+read_docs.py
+build_gmp_outline.js
+package.json
+package-lock.json
+styles.css
+start.ps1
+*.md
+!README.md
+!README_CN.md
+!SETUP.md
+!gmp-web/README.md
+!gmp-web/AGENTS.md
+!gmp-web/CLAUDE.md
+
+# ── 其他大文件目录（原始素材，不上传）────────────────────
+所有附录/
+制药企业GMP/
+工业规程/
+智能化教材/
+本科教材汇总/
+2024级教材/
+药品GMP学习智能体项目-GMP相关政策法规/
+药品相关法律、规范/

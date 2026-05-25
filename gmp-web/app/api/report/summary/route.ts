@@ -1,0 +1,130 @@
+import { NextRequest, NextResponse } from 'next/server'
+import { verifyToken } from '@/lib/auth'
+import { db } from '@/db'
+
+// GET /api/report/summary
+// 返回成绩报告所需的全部聚合数据
+export async function GET(req: NextRequest) {
+  const token = req.headers.get('authorization')?.replace('Bearer ', '')
+  if (!token) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  const payload = verifyToken(token)
+  if (!payload) return NextResponse.json({ error: 'Invalid token' }, { status: 401 })
+
+  const { userId } = payload
+
+  // ── 1. 总体统计 ─────────────────────────────────────────────────────────────
+  const overall = db.$client.prepare(`
+    SELECT COUNT(*) as total, SUM(is_correct) as correct
+    FROM question_history WHERE user_id = ?
+  `).get(userId) as { total: number; correct: number }
+
+  // ── 2. 游戏状态 ─────────────────────────────────────────────────────────────
+  const game = db.$client.prepare(`
+    SELECT xp, points, rank_level, rank_title, streak_days, max_streak
+    FROM user_game_state WHERE user_id = ?
+  `).get(userId) as { xp: number; points: number; rank_level: number; rank_title: string; streak_days: number; max_streak: number } | undefined
+
+  // ── 3. 按项目统计（最近答题） ─────────────────────────────────────────────
+  const byProject = db.$client.prepare(`
+    SELECT q.project_name,
+           COUNT(*) as total,
+           SUM(qh.is_correct) as correct
+    FROM question_history qh
+    JOIN questions q ON q.question_id = qh.question_id
+    WHERE qh.user_id = ? AND q.project_name IS NOT NULL
+    GROUP BY q.project_name
+    ORDER BY total DESC
+  `).all(userId) as { project_name: string; total: number; correct: number }[]
+
+  // ── 4. 近 14 天每日答题数 ────────────────────────────────────────────────
+  const byDate = db.$client.prepare(`
+    SELECT substr(answered_at, 1, 10) as date,
+           COUNT(*) as total,
+           SUM(is_correct) as correct
+    FROM question_history
+    WHERE user_id = ?
+      AND answered_at >= datetime('now', '-14 days')
+    GROUP BY date
+    ORDER BY date ASC
+  `).all(userId) as { date: string; total: number; correct: number }[]
+
+  // ── 5. 前测分数 ──────────────────────────────────────────────────────────
+  const latestPlan = db.$client.prepare(`
+    SELECT score, edu_level, major, wrong_count, created_at
+    FROM learning_plans
+    WHERE user_id = ?
+    ORDER BY created_at DESC
+    LIMIT 1
+  `).get(userId) as { score: number; edu_level: string; major: string; wrong_count: number; created_at: string } | undefined
+
+  // ── 6. 仿真记录 ──────────────────────────────────────────────────────────
+  const simSessions = db.$client.prepare(`
+    SELECT product_name, dosage_category, score, max_score, completed_at
+    FROM simulation_sessions
+    WHERE user_id = ?
+    ORDER BY completed_at DESC
+    LIMIT 5
+  `).all(userId) as { product_name: string; dosage_category: string; score: number; max_score: number; completed_at: string }[]
+
+  // ── 7. 打卡天数 ──────────────────────────────────────────────────────────
+  const checkins = db.$client.prepare(`
+    SELECT date FROM checkin_log WHERE user_id = ? ORDER BY date DESC LIMIT 60
+  `).all(userId) as { date: string }[]
+
+  // ── 8. 近 14 天错题题型分布 ─────────────────────────────────────────────
+  const wrongByType = db.$client.prepare(`
+    SELECT q.question_type, COUNT(*) as cnt
+    FROM question_history qh
+    JOIN questions q ON q.question_id = qh.question_id
+    WHERE qh.user_id = ? AND qh.is_correct = 0
+    GROUP BY q.question_type
+    ORDER BY cnt DESC
+  `).all(userId) as { question_type: string; cnt: number }[]
+
+  // ── 9. 知识点掌握度 — 薄弱点 Top 10 ───────────────────────────────────
+  const weakKps = db.$client.prepare(`
+    SELECT km.kp_id, km.confidence, km.attempt_count, km.correct_count, kp.title
+    FROM kp_mastery km
+    LEFT JOIN knowledge_points kp ON kp.kp_id = km.kp_id
+    WHERE km.user_id = ? AND km.attempt_count >= 1
+    ORDER BY km.confidence ASC
+    LIMIT 10
+  `).all(userId) as { kp_id: string; confidence: number; attempt_count: number; correct_count: number; title: string | null }[]
+
+  // ── 10. 知识点掌握度统计 ────────────────────────────────────────────────
+  const masteryStats = db.$client.prepare(`
+    SELECT
+      COUNT(*) as tested_kps,
+      SUM(CASE WHEN confidence >= 0.8 THEN 1 ELSE 0 END) as mastered,
+      SUM(CASE WHEN confidence < 0.5  THEN 1 ELSE 0 END) as weak,
+      ROUND(AVG(confidence) * 100) as avg_confidence
+    FROM kp_mastery
+    WHERE user_id = ?
+  `).get(userId) as { tested_kps: number; mastered: number; weak: number; avg_confidence: number } | undefined
+
+  return NextResponse.json({
+    overall: {
+      total:   overall.total ?? 0,
+      correct: overall.correct ?? 0,
+      accuracy: overall.total > 0 ? Math.round(((overall.correct ?? 0) / overall.total) * 100) : 0,
+    },
+    game: game ?? { xp: 0, points: 0, rank_level: 1, rank_title: 'GMP新人', streak_days: 0, max_streak: 0 },
+    by_project: byProject.map(p => ({
+      ...p,
+      accuracy: p.total > 0 ? Math.round(((p.correct ?? 0) / p.total) * 100) : 0,
+    })),
+    by_date: byDate,
+    latest_plan: latestPlan ?? null,
+    sim_sessions: simSessions,
+    checkin_dates: checkins.map(c => c.date),
+    wrong_by_type: wrongByType,
+    weak_kps: weakKps.map(k => ({
+      kp_id:        k.kp_id,
+      title:        k.title ?? k.kp_id,
+      confidence:   Math.round((k.confidence ?? 0) * 100),
+      attempt_count: k.attempt_count,
+      correct_count: k.correct_count,
+    })),
+    mastery_stats: masteryStats ?? { tested_kps: 0, mastered: 0, weak: 0, avg_confidence: 0 },
+  })
+}
