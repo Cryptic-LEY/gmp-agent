@@ -17,7 +17,7 @@ const NAV = [
     group: '学习中心',
     items: [
       { label: '主页',     icon: Gauge,         href: '/dashboard' },
-      { label: '课程学习', icon: GraduationCap, href: null         },
+      { label: '课程学习', icon: GraduationCap, href: '/course'    },
       { label: '每日练习', icon: BookOpen,       href: '/practice'  },
       { label: '连续打卡', icon: Flame,          href: '/streak'    },
       { label: '我的进度', icon: Network,        href: '/progress'  },
@@ -40,6 +40,7 @@ const NAV = [
 ]
 
 const PAGE_LABELS: Record<string, string> = {
+  '/course':   '课程学习',
   '/practice': '每日练习',
   '/streak':   '连续打卡',
   '/progress': '我的进度',
@@ -53,6 +54,7 @@ const PAGE_LABELS: Record<string, string> = {
 
 const SEARCH_ITEMS = [
   { category: '页面导航', label: '主页',       desc: '课程概述与学习进度总览',         href: '/dashboard' },
+  { category: '页面导航', label: '课程学习',   desc: '11个项目章节 · 测验 · 讨论 · 作业', href: '/course'    },
   { category: '页面导航', label: '每日练习',   desc: '完成每日 GMP 练习题',            href: '/practice'  },
   { category: '页面导航', label: '连续打卡',   desc: '查看打卡记录与连续天数',         href: '/streak'    },
   { category: '页面导航', label: '我的进度',   desc: '知识图谱个人掌握度可视化',       href: '/progress'  },

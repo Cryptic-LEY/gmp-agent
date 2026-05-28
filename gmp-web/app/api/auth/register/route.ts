@@ -7,32 +7,54 @@ import { userGameState, users } from '@/db/schema'
 import { signToken } from '@/lib/auth'
 
 export async function POST(req: NextRequest) {
-  const { email, password, displayName } = await req.json()
+  try {
+    const { email, password, displayName, role } = await req.json() as {
+      email?: string
+      password?: string
+      displayName?: string
+      role?: string
+    }
 
-  if (!email || !password || !displayName) {
-    return NextResponse.json({ error: '请填写所有必填字段' }, { status: 400 })
+    if (!email || !password || !displayName) {
+      return NextResponse.json({ error: '请填写所有必填字段' }, { status: 400 })
+    }
+
+    const registerRole = role === 'teacher' ? 'teacher' : 'student'
+
+    const existing = await db.select().from(users).where(eq(users.email, email)).get()
+    if (existing) {
+      return NextResponse.json({ error: '该邮箱已注册' }, { status: 409 })
+    }
+
+    const passwordHash = await bcrypt.hash(password, 10)
+    const userId = uuidv4()
+
+    await db.insert(users).values({
+      userId,
+      email,
+      passwordHash,
+      displayName,
+      role: registerRole,
+      persona: registerRole,
+    })
+
+    if (registerRole === 'student') {
+      await db.insert(userGameState).values({ userId })
+    }
+
+    const token = signToken({ userId, role: registerRole, orgId: 'default' })
+
+    return NextResponse.json({
+      token,
+      userId,
+      displayName,
+      role: registerRole,
+    })
+  } catch (err) {
+    console.error('register failed', err)
+    return NextResponse.json(
+      { error: err instanceof Error ? err.message : '注册失败' },
+      { status: 500 },
+    )
   }
-
-  const existing = await db.select().from(users).where(eq(users.email, email)).get()
-  if (existing) {
-    return NextResponse.json({ error: '该邮箱已注册' }, { status: 409 })
-  }
-
-  const passwordHash = await bcrypt.hash(password, 10)
-  const userId = uuidv4()
-
-  await db.insert(users).values({
-    userId,
-    email,
-    passwordHash,
-    displayName,
-    role: 'student',
-    persona: 'student',
-  })
-
-  await db.insert(userGameState).values({ userId })
-
-  const token = signToken({ userId, role: 'student', orgId: 'default' })
-
-  return NextResponse.json({ token, userId, displayName, role: 'student' })
 }

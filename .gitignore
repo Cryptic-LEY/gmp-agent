@@ -36,6 +36,10 @@ gmp-web/.env.local
 # ── 临时转换文件 ──────────────────────────────────────────
 tmp_converted/
 tmp_d_level/
+tmp_*
+
+# ── 本地一次性脚本（个人硬编码路径，不上传）──────────────
+gmp-web/db/apply_migration.py
 
 # ── Node.js ──────────────────────────────────────────────
 node_modules/

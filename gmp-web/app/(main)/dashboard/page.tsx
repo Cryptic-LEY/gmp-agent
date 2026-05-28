@@ -8,6 +8,7 @@ import dynamic from 'next/dynamic'
 const GraphPanel = dynamic(() => import('./GraphPanel'), { ssr: false })
 
 interface GameState { xp: number; points: number; rankLevel: number; rankTitle: string; rankProgress: number; xpToNext: number; streakDays: number; maxStreak: number }
+interface ModuleStats { totalEarnedHours: number; totalMaxHours: number; hasData: boolean; eduLevel: string }
 
 type StudyStep = 'profile' | 'quiz' | 'route'
 interface DiagnosticQuestion { id: string; stem: string; options: string[]; answer: number; dimension: string }
@@ -166,6 +167,7 @@ function buildStudyRoute(level: string, education: string, major: string): Study
 export default function DashboardPage() {
   const router = useRouter()
   const [gs, setGs]                   = useState<GameState | null>(null)
+  const [moduleStats, setModuleStats]      = useState<ModuleStats | null>(null)
   const [activeTab, setActiveTab]          = useState('overview')
   const [activeChIdx, setActiveChIdx]      = useState(0)
   const [activeGraphType, setActiveGraphType] = useState<'knowledge' | 'ability' | 'mastery'>('knowledge')
@@ -193,6 +195,19 @@ export default function DashboardPage() {
     setToken(t)
     fetch('/api/game/state', { headers: { Authorization: `Bearer ${t}` } })
       .then(r => r.json()).then(setGs).catch(() => {})
+    fetch('/api/module/scores', { headers: { Authorization: `Bearer ${t}` } })
+      .then(r => r.json())
+      .then(data => {
+        if (data && typeof data.totalMaxHours === 'number') {
+          setModuleStats({
+            totalEarnedHours: data.totalEarnedHours ?? 0,
+            totalMaxHours:    data.totalMaxHours,
+            hasData:          data.totalEarnedHours > 0,
+            eduLevel:         data.eduLevel ?? 'college',
+          })
+        }
+      })
+      .catch(() => {})
   }, [router])
 
   // 切到错题本时拉取数据
@@ -349,20 +364,41 @@ export default function DashboardPage() {
           </div>
         </div>
 
-        {/* 课时分（待模块测试解锁） */}
-        <div style={{ ...PANEL, padding: '14px 18px', display: 'flex', alignItems: 'center', gap: 14, opacity: 0.72 }}>
+        {/* 课时分（模块测试累计） */}
+        <div style={{ ...PANEL, padding: '14px 18px', display: 'flex', alignItems: 'center', gap: 14, opacity: moduleStats ? 1 : 0.72 }}>
           <div style={{ width: 42, height: 42, borderRadius: 12, background: 'linear-gradient(135deg,#7c3aed,#a855f7)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, fontSize: 20 }}>
             📚
           </div>
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
-              <span style={{ fontSize: 22, fontWeight: 800, color: '#183b4b' }}>—</span>
-              <span style={{ fontSize: 12, color: '#6b7d86' }}>课时分</span>
+              <span style={{ fontSize: 22, fontWeight: 800, color: '#183b4b' }}>
+                {moduleStats ? moduleStats.totalEarnedHours.toFixed(1) : '—'}
+              </span>
+              <span style={{ fontSize: 12, color: '#6b7d86' }}>
+                {moduleStats ? `/ ${moduleStats.totalMaxHours} 课时分` : '课时分'}
+              </span>
             </div>
             <div style={{ marginTop: 2 }}>
               <span style={{ fontSize: 12, color: '#7c3aed', fontWeight: 600 }}>学业成绩</span>
+              {moduleStats && (
+                <span style={{ fontSize: 11, color: '#9ba8b0', marginLeft: 6 }}>
+                  {moduleStats.eduLevel === 'undergraduate' ? '本科' : '专科'}
+                </span>
+              )}
             </div>
-            <div style={{ marginTop: 4, fontSize: 11, color: '#9ba8b0' }}>完成模块测试后解锁</div>
+            {moduleStats ? (
+              <div style={{ marginTop: 6, height: 5, borderRadius: 999, background: 'rgba(124,58,237,0.12)', overflow: 'hidden' }}>
+                <div style={{
+                  height: '100%',
+                  width: `${Math.min(100, (moduleStats.totalEarnedHours / moduleStats.totalMaxHours) * 100)}%`,
+                  background: 'linear-gradient(90deg,#7c3aed,#a855f7)',
+                  borderRadius: 999,
+                  transition: 'width 0.5s ease',
+                }} />
+              </div>
+            ) : (
+              <div style={{ marginTop: 4, fontSize: 11, color: '#9ba8b0' }}>完成模块测试后解锁</div>
+            )}
           </div>
         </div>
       </section>

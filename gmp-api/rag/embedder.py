@@ -120,6 +120,34 @@ def run():
             time.sleep(SLEEP_SEC)
     print()
 
+    # ── skill_library ────────────────────────────────────────────────────────
+    try:
+        cur.execute(
+            "SELECT skill_id, skill_name, description, defect_source, tool_name "
+            "FROM skill_library WHERE embedding IS NULL AND status='active'"
+        )
+        skill_rows = cur.fetchall()
+    except Exception:
+        skill_rows = []
+    print(f"skill_library 待生成: {len(skill_rows)} 条")
+
+    for i in range(0, len(skill_rows), BATCH_SIZE):
+        batch = skill_rows[i:i + BATCH_SIZE]
+        # 文本格式: "技能名 描述 典型缺陷场景 依赖工具" 截断至500字
+        texts = [(f"{r[1]} {r[2] or ''} {r[3] or ''} {r[4] or ''}")[:500] for r in batch]
+        vecs  = embed_batch(texts)
+        if vecs is None:
+            break
+        for (skill_id, *_), vec in zip(batch, vecs):
+            cur.execute("UPDATE skill_library SET embedding=? WHERE skill_id=?",
+                        (json.dumps(vec), skill_id))
+        conn.commit()
+        done = min(i + BATCH_SIZE, len(skill_rows))
+        print(f"  skill_library {done}/{len(skill_rows)}", end='\r')
+        if done < len(skill_rows):
+            time.sleep(SLEEP_SEC)
+    print()
+
     # 统计
     cur.execute("SELECT COUNT(*) FROM reg_library WHERE embedding IS NOT NULL")
     reg_done = cur.fetchone()[0]
@@ -132,11 +160,19 @@ def run():
         case_total = cur.fetchone()[0]
     except Exception:
         case_done = case_total = 0
+    try:
+        cur.execute("SELECT COUNT(*) FROM skill_library WHERE embedding IS NOT NULL")
+        skill_done = cur.fetchone()[0]
+        cur.execute("SELECT COUNT(*) FROM skill_library")
+        skill_total = cur.fetchone()[0]
+    except Exception:
+        skill_done = skill_total = 0
     conn.close()
     print(f"\nEmbedding生成完成")
-    print(f"  reg_library:    {reg_done} 条已有向量")
+    print(f"  reg_library:      {reg_done} 条已有向量")
     print(f"  knowledge_points: {kp_done} 条已有向量")
-    print(f"  case_library:   {case_done}/{case_total} 条已有向量")
+    print(f"  case_library:     {case_done}/{case_total} 条已有向量")
+    print(f"  skill_library:    {skill_done}/{skill_total} 条已有向量")
 
 
 if __name__ == "__main__":

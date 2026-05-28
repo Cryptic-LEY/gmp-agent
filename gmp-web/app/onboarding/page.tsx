@@ -95,7 +95,6 @@ export default function OnboardingPage() {
   // Step 2 — 答题
   const [questions, setQuestions]     = useState<Question[]>([])
   const [answers, setAnswers]         = useState<Record<string, string[]>>({})
-  const [current, setCurrent]         = useState(0)
   const [loading, setLoading]         = useState(false)
   const [submitting, setSubmitting]   = useState(false)
 
@@ -213,12 +212,9 @@ export default function OnboardingPage() {
     })
   }
 
-  const q = questions[current]
-  const isMulti   = q?.question_type === '多选题'
-  const selected  = answers[q?.question_id ?? ''] ?? []
-  const answered  = selected.length > 0
-  const allAnswered = questions.every(q => (answers[q.question_id]?.length ?? 0) > 0)
-  const progress    = questions.length ? Math.round(((current + 1) / questions.length) * 100) : 0
+  const allAnswered   = questions.every(q => (answers[q.question_id]?.length ?? 0) > 0)
+  const answeredCount = questions.filter(q => (answers[q.question_id]?.length ?? 0) > 0).length
+  const progress      = questions.length ? Math.round((answeredCount / questions.length) * 100) : 0
 
   // ── Step 0 — 保存注册信息，进入选择身份 ──────────────────────────────────
 
@@ -476,161 +472,232 @@ export default function OnboardingPage() {
           </div>
         )}
 
-        {/* ── Step 2: 答题 ──────────────────────────────────────────────── */}
+        {/* ── Step 2: 能力前测（全题展开） ─────────────────────────────── */}
         {step === 2 && (
           <div>
-            {/* Progress header */}
-            <div style={{ padding: '20px 32px 16px', borderBottom: '1px solid rgba(31,71,92,0.08)' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
-                <span style={{ fontWeight: 700, fontSize: 15, color: '#183b4b' }}>
-                  能力前测 — 第 {current + 1} / {questions.length} 题
-                </span>
-                <span style={{ fontSize: 12, color: '#6b8a98' }}>
-                  {eduLevel === 'college' ? '专科' : '本科'} · {major}
-                </span>
+            <style>{`
+              @keyframes spin { to { transform: rotate(360deg) } }
+              .q-opt:hover { background: #f4f7f9 !important; }
+              .q-judge:hover { filter: brightness(0.97); }
+            `}</style>
+
+            {/* ── 顶部进度区 ─────────────────────────────────────────── */}
+            <div style={{ padding: '24px 32px 18px', borderBottom: '1px solid #f0f3f5' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16 }}>
+                <div>
+                  <h2 style={{ margin: 0, fontSize: 17, fontWeight: 800, color: '#183b4b', letterSpacing: '-0.01em' }}>能力前测</h2>
+                  <p style={{ margin: '3px 0 0', fontSize: 12, color: '#93aab7' }}>
+                    {eduLevel === 'college' ? '专科' : '本科'} · {major}
+                  </p>
+                </div>
+                <div style={{ textAlign: 'right', lineHeight: 1 }}>
+                  <span style={{ fontSize: 26, fontWeight: 900, color: answeredCount === questions.length && questions.length > 0 ? '#1d6f78' : '#183b4b', letterSpacing: '-0.04em' }}>
+                    {answeredCount}
+                  </span>
+                  <span style={{ fontSize: 13, color: '#b0c4ce', fontWeight: 400 }}> / {questions.length}</span>
+                  <p style={{ margin: '3px 0 0', fontSize: 11, color: '#93aab7' }}>已作答</p>
+                </div>
               </div>
-              {/* Progress bar */}
-              <div style={{ height: 6, borderRadius: 3, background: '#eef4f3', overflow: 'hidden' }}>
-                <div style={{ height: '100%', width: `${progress}%`, background: 'linear-gradient(90deg,#1d6f78,#35818a)', borderRadius: 3, transition: 'width 0.3s' }} />
+
+              {/* 进度条 */}
+              <div style={{ height: 3, borderRadius: 2, background: '#eef2f5' }}>
+                <div style={{
+                  height: '100%', borderRadius: 2,
+                  width: `${progress}%`,
+                  background: 'linear-gradient(90deg, #1d6f78, #35818a)',
+                  transition: 'width 0.35s ease',
+                }} />
               </div>
-              {/* Question dots */}
-              <div style={{ display: 'flex', gap: 4, marginTop: 10, flexWrap: 'wrap' }}>
+
+              {/* 题号快速跳转 */}
+              <div style={{ display: 'flex', gap: 4, marginTop: 12, flexWrap: 'wrap' }}>
                 {questions.map((qt, i) => {
                   const done = (answers[qt.question_id]?.length ?? 0) > 0
                   return (
-                    <div key={i} onClick={() => setCurrent(i)} style={{
-                      width: 22, height: 22, borderRadius: 4, cursor: 'pointer', fontSize: 10, fontWeight: 600,
-                      display: 'flex', alignItems: 'center', justifyContent: 'center',
-                      background: i === current ? '#183b4b' : done ? '#1d6f78' : '#eef4f3',
-                      color: i === current || done ? '#fff' : '#9ba8b0',
-                    }}>
+                    <button
+                      key={i}
+                      onClick={() => document.getElementById(`q-card-${i}`)?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })}
+                      style={{
+                        width: 26, height: 26, borderRadius: '50%',
+                        border: done ? 'none' : '1.5px solid #dde6eb',
+                        cursor: 'pointer', fontSize: 10, fontWeight: 700, padding: 0,
+                        background: done ? '#1d6f78' : '#fff',
+                        color: done ? '#fff' : '#93aab7',
+                        transition: 'all 0.15s',
+                      }}
+                    >
                       {i + 1}
-                    </div>
+                    </button>
                   )
                 })}
               </div>
             </div>
 
-            {/* Question body */}
+            {/* ── 题目列表 ─────────────────────────────────────────────── */}
             {loading ? (
-              <div style={{ padding: '80px', textAlign: 'center', color: '#6b8a98', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 16 }}>
-                <Loader2 size={32} style={{ animation: 'spin 1s linear infinite', color: '#1d6f78' }} />
-                <style>{`@keyframes spin { to { transform: rotate(360deg) } }`}</style>
-                <span>正在生成个性化题目…</span>
+              <div style={{ padding: '72px 32px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 14 }}>
+                <Loader2 size={26} style={{ animation: 'spin 1s linear infinite', color: '#1d6f78' }} />
+                <span style={{ fontSize: 13, color: '#93aab7' }}>正在生成个性化题目…</span>
               </div>
-            ) : q ? (
-              <div style={{ padding: '32px' }}>
-                {/* Type badge */}
-                <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
-                  <span style={{ fontSize: 11, padding: '3px 8px', borderRadius: 4, background: 'rgba(29,111,120,0.1)', color: '#1d6f78', fontWeight: 600 }}>
-                    {q.question_type}
-                  </span>
-                  <span style={{ fontSize: 11, padding: '3px 8px', borderRadius: 4, background: 'rgba(31,71,92,0.06)', color: '#6b8a98' }}>
-                    {q.difficulty}
-                  </span>
-                  {isMulti && (
-                    <span style={{ fontSize: 11, padding: '3px 8px', borderRadius: 4, background: 'rgba(220,120,40,0.1)', color: '#d97706', fontWeight: 600 }}>
-                      可多选
-                    </span>
-                  )}
-                </div>
+            ) : (
+              <div style={{ maxHeight: '56vh', overflowY: 'auto', padding: '16px 24px 4px', display: 'flex', flexDirection: 'column', gap: 10 }}>
+                {questions.map((qt, i) => {
+                  const isQMulti = qt.question_type === '多选题'
+                  const sel = answers[qt.question_id] ?? []
+                  const isDone = sel.length > 0
 
-                {/* Stem */}
-                <p style={{ fontSize: 16, fontWeight: 600, color: '#183b4b', lineHeight: 1.7, margin: '0 0 24px' }}>
-                  {q.stem}
-                </p>
-
-                {/* Options */}
-                {q.question_type === '判断题' ? (
-                  <div style={{ display: 'flex', gap: 12 }}>
-                    {[
-                      { key: 'A', label: '✓ 正确', selColor: '#16a34a', selBg: 'rgba(22,163,74,0.09)', selBorder: '#16a34a' },
-                      { key: 'B', label: '✗ 错误', selColor: '#dc2626', selBg: 'rgba(220,38,38,0.08)', selBorder: '#dc2626' },
-                    ].map(({ key, label, selColor, selBg, selBorder }) => {
-                      const sel = selected.includes(key)
-                      return (
-                        <div key={key} onClick={() => toggleAnswer(q.question_id, key, false)} style={{
-                          flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center',
-                          padding: '20px 16px', borderRadius: 12, cursor: 'pointer',
-                          border: `2px solid ${sel ? selBorder : '#dde3e8'}`,
-                          background: sel ? selBg : '#fff',
-                          color: sel ? selColor : '#9ba8b0',
-                          fontSize: 17, fontWeight: 700, letterSpacing: '0.02em',
-                          transition: 'all 0.15s',
-                          boxShadow: sel ? `0 0 0 3px ${selColor}22` : 'none',
-                        }}>
-                          {label}
-                        </div>
-                      )
-                    })}
-                  </div>
-                ) : (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                    {(q.options ?? []).map(({ key, text }) => {
-                      const sel = selected.includes(key)
-                      return (
-                        <div key={key} onClick={() => toggleAnswer(q.question_id, key, isMulti)} style={{
-                          display: 'flex', alignItems: 'flex-start', gap: 12, padding: '14px 16px', borderRadius: 10, cursor: 'pointer',
-                          border: `2px solid ${sel ? '#1d6f78' : '#dde3e8'}`,
-                          background: sel ? 'rgba(29,111,120,0.06)' : '#fff',
-                          transition: 'all 0.15s',
-                        }}>
-                          <div style={{
-                            width: 24, height: 24, borderRadius: isMulti ? 4 : '50%', border: `2px solid ${sel ? '#1d6f78' : '#bfcbd9'}`,
-                            background: sel ? '#1d6f78' : '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center',
-                            flexShrink: 0, transition: 'all 0.15s',
+                  return (
+                    <div
+                      key={qt.question_id}
+                      id={`q-card-${i}`}
+                      style={{
+                        background: '#fff',
+                        borderRadius: 10,
+                        border: '1px solid #eaeff2',
+                        boxShadow: isDone
+                          ? 'inset 3px 0 0 #1d6f78, 0 1px 4px rgba(0,0,0,0.04)'
+                          : '0 1px 4px rgba(0,0,0,0.04)',
+                        padding: '16px 18px 14px',
+                        transition: 'box-shadow 0.2s',
+                      }}
+                    >
+                      {/* 题号 + 标签 */}
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                          <span style={{
+                            fontSize: 22, fontWeight: 900, lineHeight: 1, minWidth: 30,
+                            color: isDone ? '#1d6f78' : '#cdd8df',
+                            fontVariantNumeric: 'tabular-nums',
                           }}>
-                            {sel && <span style={{ color: '#fff', fontSize: 11, fontWeight: 800 }}>{key}</span>}
-                            {!sel && <span style={{ color: '#bfcbd9', fontSize: 11 }}>{key}</span>}
+                            {String(i + 1).padStart(2, '0')}
+                          </span>
+                          <div style={{ display: 'flex', gap: 4 }}>
+                            <span style={{ fontSize: 10, fontWeight: 600, color: '#5a7f8e', background: '#eef2f5', padding: '2px 8px', borderRadius: 20, letterSpacing: '0.01em' }}>
+                              {qt.question_type}
+                            </span>
+                            <span style={{ fontSize: 10, color: '#93aab7', background: '#eef2f5', padding: '2px 8px', borderRadius: 20 }}>
+                              {qt.difficulty}
+                            </span>
+                            {isQMulti && (
+                              <span style={{ fontSize: 10, fontWeight: 600, color: '#b45309', background: 'rgba(180,83,9,0.07)', padding: '2px 8px', borderRadius: 20 }}>
+                                多选
+                              </span>
+                            )}
                           </div>
-                          <span style={{ fontSize: 14, color: '#183b4b', lineHeight: 1.6, paddingTop: 1 }}>{text}</span>
                         </div>
-                      )
-                    })}
-                  </div>
-                )}
+                        {isDone && <CheckCircle2 size={15} color="#1d6f78" strokeWidth={2.5} />}
+                      </div>
+
+                      {/* 题干 */}
+                      <p style={{ margin: '0 0 12px', fontSize: 14, fontWeight: 500, color: '#1c3140', lineHeight: 1.8 }}>
+                        {qt.stem}
+                      </p>
+
+                      {/* 选项 */}
+                      {qt.question_type === '判断题' ? (
+                        <div style={{ display: 'flex', gap: 8 }}>
+                          {[
+                            { key: 'A', label: '正确', icon: '✓', activeColor: '#15803d', activeBg: '#f0fdf4', activeBorder: '#86efac' },
+                            { key: 'B', label: '错误', icon: '✗', activeColor: '#b91c1c', activeBg: '#fff1f2', activeBorder: '#fca5a5' },
+                          ].map(({ key, label, icon, activeColor, activeBg, activeBorder }) => {
+                            const active = sel.includes(key)
+                            return (
+                              <div
+                                key={key}
+                                className="q-judge"
+                                onClick={() => toggleAnswer(qt.question_id, key, false)}
+                                style={{
+                                  flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7,
+                                  padding: '11px', borderRadius: 8, cursor: 'pointer',
+                                  border: `1.5px solid ${active ? activeBorder : '#dde6eb'}`,
+                                  background: active ? activeBg : '#fafbfc',
+                                  color: active ? activeColor : '#7a96a4',
+                                  fontSize: 13, fontWeight: active ? 700 : 500,
+                                  transition: 'all 0.12s',
+                                  userSelect: 'none',
+                                }}
+                              >
+                                <span style={{ fontSize: 15 }}>{icon}</span>{label}
+                              </div>
+                            )
+                          })}
+                        </div>
+                      ) : (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+                          {(qt.options ?? []).map(({ key, text }) => {
+                            const active = sel.includes(key)
+                            return (
+                              <div
+                                key={key}
+                                className={active ? '' : 'q-opt'}
+                                onClick={() => toggleAnswer(qt.question_id, key, isQMulti)}
+                                style={{
+                                  display: 'flex', alignItems: 'flex-start', gap: 11,
+                                  padding: '8px 10px', borderRadius: 7, cursor: 'pointer',
+                                  border: `1.5px solid ${active ? '#1d6f78' : '#eaeff2'}`,
+                                  background: active ? 'rgba(29,111,120,0.06)' : '#fafbfc',
+                                  transition: 'all 0.12s',
+                                  userSelect: 'none',
+                                }}
+                              >
+                                <div style={{
+                                  width: 18, height: 18, borderRadius: isQMulti ? 4 : '50%', flexShrink: 0, marginTop: 2,
+                                  border: `2px solid ${active ? '#1d6f78' : '#c5d3da'}`,
+                                  background: active ? '#1d6f78' : '#fff',
+                                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                  transition: 'all 0.12s',
+                                }}>
+                                  {active && (
+                                    isQMulti
+                                      ? <span style={{ color: '#fff', fontSize: 8, fontWeight: 900, lineHeight: 1 }}>✓</span>
+                                      : <div style={{ width: 5, height: 5, borderRadius: '50%', background: '#fff' }} />
+                                  )}
+                                </div>
+                                <span style={{ fontSize: 13, lineHeight: 1.65, color: active ? '#1c3140' : '#3d5a68' }}>
+                                  <span style={{ fontWeight: 700, color: active ? '#1d6f78' : '#7a96a4', marginRight: 6 }}>{key}.</span>
+                                  <span style={{ fontWeight: active ? 600 : 400 }}>{text}</span>
+                                </span>
+                              </div>
+                            )
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  )
+                })}
               </div>
-            ) : null}
-
-            {/* Navigation footer */}
-            <div style={{ padding: '16px 32px 24px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <button onClick={() => setCurrent(c => Math.max(0, c - 1))} disabled={current === 0} style={{
-                padding: '10px 20px', borderRadius: 8, border: '1px solid #dde3e8', background: '#fff',
-                color: current === 0 ? '#bfcbd9' : '#46606f', cursor: current === 0 ? 'not-allowed' : 'pointer',
-                fontSize: 13, display: 'flex', alignItems: 'center', gap: 6,
-              }}>
-                <ChevronLeft size={15} />上一题
-              </button>
-
-              {current < questions.length - 1 ? (
-                <button onClick={() => setCurrent(c => c + 1)} disabled={!answered} style={{
-                  padding: '10px 24px', borderRadius: 8, border: 'none',
-                  background: answered ? '#1d6f78' : '#dde3e8',
-                  color: answered ? '#fff' : '#9ba8b0',
-                  cursor: answered ? 'pointer' : 'not-allowed',
-                  fontSize: 13, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 6,
-                }}>
-                  下一题 <ChevronRight size={15} />
-                </button>
-              ) : (
-                <button onClick={submitAnswers} disabled={!allAnswered || submitting} style={{
-                  padding: '10px 28px', borderRadius: 8, border: 'none',
-                  background: allAnswered && !submitting ? '#183b4b' : '#dde3e8',
-                  color: allAnswered && !submitting ? '#fff' : '#9ba8b0',
-                  cursor: allAnswered && !submitting ? 'pointer' : 'not-allowed',
-                  fontSize: 13, fontWeight: 700, display: 'flex', alignItems: 'center', gap: 8,
-                }}>
-                  {submitting ? <Loader2 size={15} style={{ animation: 'spin 1s linear infinite' }} /> : <CheckCircle2 size={15} />}
-                  {submitting ? '提交中…' : '提交答卷'}
-                </button>
-              )}
-            </div>
-
-            {!allAnswered && current === questions.length - 1 && (
-              <p style={{ textAlign: 'center', fontSize: 12, color: '#d97706', paddingBottom: 16, margin: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4 }}>
-                <AlertCircle size={13} />还有 {questions.filter(qt => !(answers[qt.question_id]?.length)).length} 道题未作答
-              </p>
             )}
+
+            {/* ── 底部提交 ─────────────────────────────────────────────── */}
+            <div style={{ padding: '14px 24px 22px', borderTop: '1px solid #f0f3f5' }}>
+              {!allAnswered && questions.length > 0 && (
+                <p style={{ margin: '0 0 10px', fontSize: 12, color: '#b45309', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5 }}>
+                  <AlertCircle size={12} />
+                  还有 {questions.filter(qt => !(answers[qt.question_id]?.length)).length} 道题未作答
+                </p>
+              )}
+              <button
+                onClick={submitAnswers}
+                disabled={!allAnswered || submitting}
+                style={{
+                  width: '100%', padding: '13px', borderRadius: 10, border: 'none',
+                  background: allAnswered && !submitting
+                    ? 'linear-gradient(135deg, #183b4b 0%, #1d6f78 100%)'
+                    : '#eef2f5',
+                  color: allAnswered && !submitting ? '#fff' : '#9eb3be',
+                  fontWeight: 700, fontSize: 14,
+                  cursor: allAnswered && !submitting ? 'pointer' : 'not-allowed',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
+                  letterSpacing: '0.02em',
+                  transition: 'opacity 0.15s',
+                }}
+              >
+                {submitting
+                  ? <><Loader2 size={14} style={{ animation: 'spin 1s linear infinite' }} />提交中…</>
+                  : <><CheckCircle2 size={14} />提交答卷</>
+                }
+              </button>
+            </div>
           </div>
         )}
 
