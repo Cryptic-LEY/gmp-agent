@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
+import { CalendarCheck2, Flame, Sparkles, Trophy } from 'lucide-react'
 
 interface StreakData { checkedDates: string[]; streakDays: number; maxStreak: number; totalDays: number }
 
@@ -37,6 +38,14 @@ function getMonthLabels(days: string[]) {
   return labels
 }
 
+function getEncourageText(streakDays: number) {
+  if (streakDays === 0) return '今天还没打卡，完成一次学习就能点亮今日进度。'
+  if (streakDays >= 14) return '稳定学习节奏已经形成，继续保持 GMP 合规训练。'
+  if (streakDays >= 7) return '已连续坚持一周以上，知识积累正在变成习惯。'
+  if (streakDays >= 3) return '连续学习状态不错，再坚持几天冲刺周目标。'
+  return '好的开始，继续加油。'
+}
+
 export default function StreakPage() {
   const router = useRouter()
   const [data, setData]             = useState<StreakData | null>(null)
@@ -56,6 +65,10 @@ export default function StreakPage() {
   const cols: string[][] = []
   for (let i = 0; i < days.length; i += 7) cols.push(days.slice(i, i + 7))
   const monthLabels = getMonthLabels(days)
+  const streakDays = data?.streakDays ?? 0
+  const maxStreak = data?.maxStreak ?? 0
+  const totalDays = data?.totalDays ?? 0
+  const weekChecked = days.slice(-7).filter(date => checkedSet.has(date)).length
 
   function cellColor(date: string) {
     if (date > today) return 'rgba(31,71,92,0.06)'
@@ -66,43 +79,63 @@ export default function StreakPage() {
 
   return (
     <div style={{ padding: 20, minHeight: '100vh' }}>
-
-      {/* Page header */}
-      <div style={{ marginBottom: 20 }}>
-        <p style={{ color: '#1d6f78', fontSize: 11, fontWeight: 700, letterSpacing: '0.15em', textTransform: 'uppercase', margin: 0 }}>学习中心</p>
-        <h1 style={{ color: '#183b4b', fontSize: 26, fontWeight: 700, margin: '4px 0 0', fontFamily: "'Trebuchet MS','Microsoft YaHei',sans-serif" }}>连续打卡</h1>
-      </div>
-
-      {/* Hero stat */}
-      <div style={{ ...PANEL, padding: '28px 32px', marginBottom: 14, display: 'flex', alignItems: 'center', gap: 24 }}>
-        <div style={{ width: 64, height: 64, borderRadius: 18, background: 'rgba(200,129,43,0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 28, flexShrink: 0 }}>
-          {!loading && (data?.streakDays ?? 0) >= 3 ? '🔥' : '📘'}
-        </div>
-        <div style={{ flex: 1 }}>
-          <p style={{ color: '#183b4b', fontSize: 36, fontWeight: 700, margin: 0, fontFamily: "'Trebuchet MS','Microsoft YaHei',sans-serif", lineHeight: 1 }}>
-            {loading ? '—' : `${data?.streakDays ?? 0} 天`}
-          </p>
-          <p style={{ color: '#6b8a98', fontSize: 14, margin: '6px 0 0' }}>
-            {loading ? '' : data?.streakDays === 0 ? '今天还没打卡，快来开始吧！' : data!.streakDays >= 7 ? '坚持就是胜利，继续保持！' : '好的开始，继续加油！'}
-          </p>
-        </div>
-        <div style={{ display: 'flex', gap: 16 }}>
-          {[
-            { label: '历史最长', value: data?.maxStreak ?? 0, unit: '天' },
-            { label: '累计打卡', value: data?.totalDays ?? 0, unit: '天' },
-          ].map(s => (
-            <div key={s.label} style={{ textAlign: 'center', padding: '10px 20px', background: 'rgba(29,111,120,0.06)', borderRadius: 14, border: '1px solid rgba(29,111,120,0.1)' }}>
-              <p style={{ color: '#183b4b', fontSize: 24, fontWeight: 700, margin: 0, fontFamily: "'Trebuchet MS','Microsoft YaHei',sans-serif" }}>{loading ? '—' : s.value}</p>
-              <p style={{ color: '#6b8a98', fontSize: 11, margin: '3px 0 0' }}>{s.unit} · {s.label}</p>
+      <section style={{ position: 'relative', overflow: 'hidden', borderRadius: 24, padding: 24, marginBottom: 16, background: 'linear-gradient(135deg, rgba(29,111,120,0.96), rgba(53,129,138,0.86) 48%, rgba(200,129,43,0.82))', boxShadow: '0 24px 60px rgba(29,53,74,0.16)' }}>
+        <div style={{ position: 'absolute', right: -48, top: -62, width: 210, height: 210, borderRadius: '50%', background: 'rgba(255,255,255,0.14)' }} />
+        <div style={{ position: 'absolute', left: '42%', bottom: -74, width: 180, height: 180, borderRadius: '50%', background: 'rgba(255,255,255,0.09)' }} />
+        <div style={{ position: 'relative', display: 'flex', gap: 20, alignItems: 'stretch', flexWrap: 'wrap' }}>
+          <div style={{ flex: '1 1 420px', minWidth: 0 }}>
+            <p style={{ color: 'rgba(255,255,255,0.78)', fontSize: 11, fontWeight: 800, letterSpacing: '0.18em', textTransform: 'uppercase', margin: 0 }}>学习中心</p>
+            <h1 style={{ color: '#fff', fontSize: 34, fontWeight: 900, margin: '8px 0 0', fontFamily: "'Trebuchet MS','Microsoft YaHei',sans-serif" }}>连续打卡</h1>
+            <p style={{ color: 'rgba(255,255,255,0.84)', fontSize: 14, lineHeight: 1.8, margin: '10px 0 0', maxWidth: 520 }}>
+              每天登录自动点亮学习足迹，用稳定节奏积累 GMP 法规、质量管理与实训能力。
+            </p>
+            <div style={{ display: 'flex', gap: 10, marginTop: 18, flexWrap: 'wrap' }}>
+              {[
+                { icon: Flame, label: '当前连续', value: loading ? '—' : `${streakDays} 天`, color: '#fff' },
+                { icon: Trophy, label: '历史最长', value: loading ? '—' : `${maxStreak} 天`, color: '#fff6d8' },
+                { icon: CalendarCheck2, label: '累计打卡', value: loading ? '—' : `${totalDays} 天`, color: '#dff9f2' },
+              ].map(item => (
+                <div key={item.label} style={{ minWidth: 128, padding: '12px 14px', borderRadius: 16, background: 'rgba(255,255,255,0.16)', border: '1px solid rgba(255,255,255,0.2)', backdropFilter: 'blur(12px)' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 7, color: 'rgba(255,255,255,0.78)', fontSize: 12, fontWeight: 800 }}>
+                    <item.icon size={14} color={item.color} />
+                    {item.label}
+                  </div>
+                  <strong style={{ display: 'block', color: '#fff', fontSize: 24, marginTop: 7 }}>{item.value}</strong>
+                </div>
+              ))}
             </div>
-          ))}
+          </div>
+          <div style={{ padding: 18, borderRadius: 22, background: 'rgba(255,255,255,0.92)', border: '1px solid rgba(255,255,255,0.46)', boxShadow: '0 20px 50px rgba(12,32,45,0.15)' }}>
+            <div style={{ width: 72, height: 72, borderRadius: 22, display: 'grid', placeItems: 'center', background: streakDays >= 3 ? 'rgba(200,129,43,0.14)' : 'rgba(29,111,120,0.1)', marginBottom: 12 }}>
+              {streakDays >= 3 ? <Flame size={34} color="#c8812b" /> : <Sparkles size={34} color="#1d6f78" />}
+            </div>
+            <p style={{ color: '#6b8a98', fontSize: 12, fontWeight: 800, margin: 0 }}>今日学习状态</p>
+            <strong style={{ display: 'block', color: '#183b4b', fontSize: 32, lineHeight: 1.1, marginTop: 6 }}>{loading ? '—' : `${streakDays} 天`}</strong>
+            <p style={{ color: '#46606f', fontSize: 13, lineHeight: 1.7, margin: '9px 0 0' }}>{loading ? '正在读取打卡数据...' : getEncourageText(streakDays)}</p>
+          </div>
         </div>
-      </div>
+      </section>
 
-      {/* Heatmap */}
+      <section style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12, marginBottom: 14 }}>
+        {[
+          { label: '本周已点亮', value: loading ? '—' : `${weekChecked}/7`, desc: '保持周学习频率' },
+          { label: '当前目标', value: loading ? '—' : streakDays >= 7 ? '进阶保持' : '连续 7 天', desc: streakDays >= 7 ? '挑战更长周期' : `还差 ${Math.max(7 - streakDays, 0)} 天` },
+          { label: '学习徽章', value: loading ? '—' : streakDays >= 14 ? '稳态学习者' : streakDays >= 7 ? '一周坚持' : streakDays >= 3 ? '连续起步' : '待点亮', desc: '由连续天数自动更新' },
+        ].map(item => (
+          <div key={item.label} style={{ ...PANEL, padding: 16, display: 'grid', gap: 6 }}>
+            <span style={{ color: '#6b8a98', fontSize: 12 }}>{item.label}</span>
+            <strong style={{ color: '#183b4b', fontSize: 24 }}>{item.value}</strong>
+            <span style={{ color: '#8aa0aa', fontSize: 12 }}>{item.desc}</span>
+          </div>
+        ))}
+      </section>
+
       <div style={{ ...PANEL, padding: '24px 28px' }}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
-          <p style={{ color: '#183b4b', fontSize: 14, fontWeight: 600, margin: 0 }}>过去 16 周活动</p>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16, gap: 12 }}>
+          <div>
+            <p style={{ color: '#183b4b', fontSize: 16, fontWeight: 800, margin: 0 }}>过去 16 周活动</p>
+            <p style={{ color: '#6b8a98', fontSize: 12, margin: '4px 0 0' }}>颜色越深代表当天已完成学习打卡。</p>
+          </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
             <span style={{ color: '#6b8a98', fontSize: 11 }}>少</span>
             {['rgba(31,71,92,0.09)', 'rgba(29,111,120,0.2)', '#35818a', '#1d6f78'].map(c => (
@@ -159,7 +192,7 @@ export default function StreakPage() {
         </div>
       </div>
 
-      <p style={{ textAlign: 'center', fontSize: 11, color: '#6b8a98', opacity: 0.7, marginTop: 16 }}>每天登录即视为打卡，坚持学习 GMP，成为合规专家 💊</p>
+      <p style={{ textAlign: 'center', fontSize: 11, color: '#6b8a98', opacity: 0.78, marginTop: 16 }}>每天登录即视为打卡，坚持学习 GMP，成为合规专家。</p>
     </div>
   )
 }

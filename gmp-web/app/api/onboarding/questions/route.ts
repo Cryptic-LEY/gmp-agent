@@ -19,9 +19,9 @@ export async function GET(req: NextRequest) {
   const OBJECTIVE_TYPES = ['单选题', '多选题', '判断题']
 
   // 拉取当前 edu_level 的所有客观题（仅中/难，不含简单题）
-  const pool = db.select().from(questions)
+  const pool = (await db.select().from(questions)
     .where(and(eq(questions.status, 'active'), eq(questions.eduLevel, eduLevel)))
-    .all()
+  )
     .filter(q => OBJECTIVE_TYPES.includes(q.questionType))
     // 只保留中、难两档
     .filter(q => q.difficulty === '中' || q.difficulty === '难')

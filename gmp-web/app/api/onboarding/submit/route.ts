@@ -7,17 +7,17 @@ import { eq } from 'drizzle-orm'
 // 将答题结果 upsert 进 kp_mastery
 // 每道题答对 → kp 正确次数+1，答错 → 只加尝试次数
 // confidence = correct_count / attempt_count （简单比率，直观可解释）
-function upsertKpMastery(userId: string, kpId: string, isCorrect: boolean) {
+async function upsertKpMastery(userId: string, kpId: string, isCorrect: boolean) {
   const correct = isCorrect ? 1 : 0
-  db.$client.prepare(`
+  await db.raw.run(`
     INSERT INTO kp_mastery (user_id, kp_id, confidence, attempt_count, correct_count, last_tested_at)
-    VALUES (?, ?, ?, 1, ?, datetime('now'))
-    ON CONFLICT(user_id, kp_id) DO UPDATE SET
+    VALUES (?, ?, ?, 1, ?, CURRENT_TIMESTAMP(3))
+    ON DUPLICATE KEY UPDATE
       attempt_count  = attempt_count + 1,
       correct_count  = correct_count + ?,
-      confidence     = CAST(correct_count + ? AS REAL) / (attempt_count + 1),
-      last_tested_at = datetime('now')
-  `).run(userId, kpId, correct, correct, correct, correct)
+      confidence     = (correct_count + ?) / (attempt_count + 1),
+      last_tested_at = CURRENT_TIMESTAMP(3)
+  `, [userId, kpId, correct, correct, correct, correct])
 }
 
 interface AnswerItem { question_id: string; answer: string }
@@ -49,7 +49,7 @@ export async function POST(req: NextRequest) {
   // 批量拉取题目（含正确答案）
   const qMap = new Map<string, typeof questions.$inferSelect>()
   for (const ans of answers) {
-    const q = db.select().from(questions).where(eq(questions.questionId, ans.question_id)).get()
+    const q = (await db.select().from(questions).where(eq(questions.questionId, ans.question_id)).limit(1))[0]
     if (q) qMap.set(ans.question_id, q)
   }
 
@@ -65,14 +65,14 @@ export async function POST(req: NextRequest) {
     if (isCorrect) { correct++ } else { wrongIds.push(ans.question_id) }
 
     // 写入答题历史（前测记录）
-    db.insert(questionHistory).values({
+    await db.insert(questionHistory).values({
       userId, questionId: ans.question_id,
       userAnswer: ans.answer, isCorrect, reviewed: false,
-    }).run()
+    }).execute()
 
     // 更新知识点掌握度
     if (q.kpId) {
-      upsertKpMastery(userId, q.kpId, isCorrect)
+      await upsertKpMastery(userId, q.kpId, isCorrect)
     }
   }
 
@@ -165,10 +165,10 @@ export async function POST(req: NextRequest) {
   }
 
   // 保存到 learning_plans
-  db.insert(learningPlans).values({
+  await db.insert(learningPlans).values({
     userId, eduLevel: edu_level, major, score, wrongCount,
     planData: JSON.stringify(plan),
-  }).run()
+  }).execute()
 
   return NextResponse.json({ score, wrong_count: wrongCount, plan, edu_level, major })
 }

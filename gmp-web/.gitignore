@@ -41,6 +41,10 @@ yarn-error.log*
 *.db-shm
 *.db-wal
 
+# runtime uploads
+/public/course/uploads/
+/public/generated/tts/
+
 # typescript
 *.tsbuildinfo
 next-env.d.ts

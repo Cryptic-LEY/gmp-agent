@@ -31,7 +31,7 @@ export async function GET(req: NextRequest) {
   const role = searchParams.get('role') || 'all'
   const search = (searchParams.get('search') || '').trim().toLowerCase()
 
-  let rows = db.select({
+  let rows = await db.select({
     userId: users.userId,
     orgId: users.orgId,
     groupId: users.groupId,
@@ -46,7 +46,7 @@ export async function GET(req: NextRequest) {
     className: users.className,
     studentId: users.studentId,
     phone: users.phone,
-  }).from(users).all()
+  }).from(users)
 
   if (role !== 'all') {
     rows = rows.filter(user => user.role === role)
@@ -101,7 +101,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: '邮箱、姓名和密码不能为空' }, { status: 400 })
     }
 
-    const existing = db.select({ userId: users.userId }).from(users).where(eq(users.email, email)).get()
+    const existing = (await db.select({ userId: users.userId }).from(users).where(eq(users.email, email)).limit(1))[0]
     if (existing) {
       return NextResponse.json({ error: '该邮箱已存在' }, { status: 409 })
     }
@@ -109,7 +109,7 @@ export async function POST(req: NextRequest) {
     const userId = uuidv4()
     const passwordHash = await bcrypt.hash(password, 10)
 
-    db.insert(users).values({
+    await db.insert(users).values({
       userId,
       email,
       passwordHash,
@@ -122,7 +122,7 @@ export async function POST(req: NextRequest) {
       className: body.className?.trim() || null,
       studentId: body.studentId?.trim() || null,
       phone: body.phone?.trim() || null,
-    }).run()
+    }).execute()
 
     return NextResponse.json({ success: true, userId }, { status: 201 })
   } catch (err) {
@@ -156,7 +156,7 @@ export async function PUT(req: NextRequest) {
       return NextResponse.json({ error: '缺少用户ID' }, { status: 400 })
     }
 
-    const target = db.select({ userId: users.userId, role: users.role }).from(users).where(eq(users.userId, body.userId)).get()
+    const target = (await db.select({ userId: users.userId, role: users.role }).from(users).where(eq(users.userId, body.userId)).limit(1))[0]
     if (!target) {
       return NextResponse.json({ error: '用户不存在' }, { status: 404 })
     }
@@ -186,7 +186,7 @@ export async function PUT(req: NextRequest) {
       return NextResponse.json({ error: '没有可更新内容' }, { status: 400 })
     }
 
-    db.update(users).set(updates).where(eq(users.userId, body.userId)).run()
+    await db.update(users).set(updates).where(eq(users.userId, body.userId)).execute()
     return NextResponse.json({ success: true })
   } catch (err) {
     console.error('update user failed', err)
@@ -212,7 +212,7 @@ export async function DELETE(req: NextRequest) {
   }
 
   try {
-    db.delete(users).where(eq(users.userId, userId)).run()
+    await db.delete(users).where(eq(users.userId, userId)).execute()
     return NextResponse.json({ success: true })
   } catch (err) {
     console.error('delete user failed', err)

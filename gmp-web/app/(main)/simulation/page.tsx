@@ -1,12 +1,17 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent, type WheelEvent } from 'react'
 import Image from 'next/image'
 import { useRouter } from 'next/navigation'
 import {
   ArrowLeft,
   ArrowRight,
   Award,
+  Backpack,
+  Bell,
+  BookOpen,
+  Bot,
+  BrainCircuit,
   Building2,
   Check,
   CheckCircle2,
@@ -23,6 +28,7 @@ import {
   Medal,
   Package,
   ScrollText,
+  Settings,
   Shield,
   ShieldAlert,
   ShieldCheck,
@@ -33,6 +39,7 @@ import {
   Ticket,
   Trophy,
   UserRound,
+  UsersRound,
   WandSparkles,
   Wrench,
   X,
@@ -66,6 +73,7 @@ import {
   type ProjectDefinition,
   type ProjectMedal,
 } from '@/lib/simulation/project-missions'
+import { FINAL_BOSS_COMPLETION_BASE_XP, PROJECT_COMPLETION_BASE_XP, PROJECT_MEDAL_BONUS_XP } from '@/lib/gamification'
 import styles from './simulation.module.css'
 
 type Screen = 'map' | 'levels' | 'briefing' | 'story' | 'boss' | 'result'
@@ -73,6 +81,7 @@ type ProjectStatus = 'cleared' | 'active' | 'locked'
 type MedalTier = ProjectMedal
 type QuestionKind = 'single' | 'multiple' | 'case'
 type ItemId = 'skip' | 'boost' | 'heal'
+type QuickPanel = 'mentor' | 'friends' | 'skills' | 'messages' | 'settings'
 
 interface PlayerState {
   xp: number
@@ -81,9 +90,61 @@ interface PlayerState {
   rankProgress: number
 }
 
+interface LeaderboardEntry {
+  userId: string
+  displayName: string
+  avatarUrl: string | null
+  school: string | null
+  major: string | null
+  xp: number
+  points: number
+  rankLevel: number
+  rankTitle: string
+  streakDays: number
+  maxStreak: number
+  leaderboardRank: number
+}
+
 interface ProjectNode extends ProjectDefinition {
   status: ProjectStatus
   medal: ProjectMedal
+}
+
+interface MapPan {
+  x: number
+  y: number
+}
+
+interface MapDragState {
+  pointerId: number
+  startX: number
+  startY: number
+  originX: number
+  originY: number
+}
+
+interface RouteTravel {
+  fromId: number
+  toId: number
+  key: number
+}
+
+interface ProjectEntryConfirm {
+  projectId: number
+  returnScreen: 'map' | 'levels'
+  fromLaunch?: boolean
+}
+
+interface ActionSignal {
+  id: number
+  message: string
+}
+
+interface NoticeMessage {
+  tone: 'success' | 'info' | 'warning'
+  title: string
+  message: string
+  actionLabel?: string
 }
 
 interface Role {
@@ -147,6 +208,7 @@ interface BattleOutcome {
   bossHp: number
   medal: MedalTier
   projectScore: number
+  timedOut?: boolean
 }
 
 interface Inventory {
@@ -167,6 +229,19 @@ interface WalletReward {
   coins: number
   gems: number
   trophies?: number
+}
+
+interface ProjectXpAward {
+  xpGained: number
+  rewardXp: number
+  alreadyClaimed: boolean
+  newXp: number
+  rankLevel: number
+  rankTitle: string
+  rankProgress: number
+  xpToNext: number
+  leveledUp: boolean
+  message: string
 }
 
 interface ProjectProgressEntry {
@@ -206,13 +281,18 @@ type QuestionSeed = [
   insight: string,
 ]
 
-const DEMO_HP = 92
+const SIMULATION_MAX_HP = 100
+const DEMO_HP = SIMULATION_MAX_HP
 const STORY_PASS_SCORE = 60
-const BOSS_MAX_HP = 480
-const BOSS_HIT_DAMAGE = 60
+const BOSS_MAX_HP = SIMULATION_MAX_HP
+const PLAYER_MISS_DAMAGE = 20
+const BOSS_BOOST_DAMAGE = 35
+const BOSS_SKIP_DAMAGE = 30
+const HEAL_AMOUNT = 25
+const SIMULATION_TIME_LIMIT_SECONDS = 90 * 60
 const WALLET_KEY = 'gmp-simulation-wallet-v2'
 const PROJECT_PROGRESS_KEY = 'gmp-simulation-project-progress-v1'
-const HP_KEY = 'gmp-simulation-hp-v1'
+const HP_KEY = 'gmp-simulation-hp-v2'
 const CARRIER_KEY_PREFIX = 'gmp-simulation-carrier-v1'
 const OPTION_KEYS = ['A', 'B', 'C', 'D']
 const FALLBACK_PLAYER: PlayerState = { xp: 280, rankLevel: 3, rankTitle: 'GMP助理', rankProgress: 0.7 }
@@ -460,6 +540,14 @@ function buildProjectNodes(progress: ProjectProgress): ProjectNode[] {
   })
 }
 
+function getCurrentUnlockedProject(projects: ProjectNode[]): ProjectNode {
+  const active = projects.find(project => project.status === 'active')
+  if (active) return active
+
+  const cleared = [...projects].reverse().find(project => project.status === 'cleared')
+  return cleared ?? projects[0]
+}
+
 function summarizeTrophies(progress: ProjectProgress): TrophySummary {
   return Object.values(progress).reduce<TrophySummary>((summary, entry) => {
     if (entry.medal === 'none') return summary
@@ -492,12 +580,98 @@ function clampHp(value: number) {
   return Math.max(0, Math.min(100, Math.round(value)))
 }
 
-function bossMaxHpFor(project: ProjectDefinition, questionCount: number) {
-  return project.finalBoss ? questionCount * BOSS_HIT_DAMAGE : BOSS_MAX_HP
+function clampNumber(value: number, min: number, max: number) {
+  return Math.max(min, Math.min(max, value))
+}
+
+function percentNumber(value: string) {
+  const parsed = Number.parseFloat(value)
+  return Number.isFinite(parsed) ? parsed : 50
+}
+
+function projectPoint(project: ProjectDefinition) {
+  return {
+    x: percentNumber(project.position.left),
+    y: percentNumber(project.position.top),
+  }
+}
+
+function routePathBetween(from: ProjectDefinition, to: ProjectDefinition, index = 0) {
+  const start = projectPoint(from)
+  const end = projectPoint(to)
+  const dx = end.x - start.x
+  const dy = end.y - start.y
+  const bend = index % 2 === 0 ? 1 : -1
+  const curveX = dy * 0.08 * bend
+  const curveY = dx * 0.08 * bend
+  const c1x = start.x + dx * 0.36 - curveX
+  const c1y = start.y + dy * 0.24 + curveY
+  const c2x = start.x + dx * 0.66 - curveX
+  const c2y = start.y + dy * 0.78 + curveY
+
+  return [
+    `M ${start.x.toFixed(2)} ${start.y.toFixed(2)}`,
+    `C ${c1x.toFixed(2)} ${c1y.toFixed(2)}`,
+    `${c2x.toFixed(2)} ${c2y.toFixed(2)}`,
+    `${end.x.toFixed(2)} ${end.y.toFixed(2)}`,
+  ].join(' ')
+}
+
+function routeAvatarStyleBetween(from: ProjectDefinition, to: ProjectDefinition, index = 0) {
+  const start = projectPoint(from)
+  const end = projectPoint(to)
+  const dx = end.x - start.x
+  const dy = end.y - start.y
+  const bend = index % 2 === 0 ? 1 : -1
+
+  return {
+    '--route-from-x': `${start.x}%`,
+    '--route-from-y': `${start.y}%`,
+    '--route-mid-x': `${start.x + dx * 0.52 - dy * 0.08 * bend}%`,
+    '--route-mid-y': `${start.y + dy * 0.5 + dx * 0.08 * bend}%`,
+    '--route-to-x': `${end.x}%`,
+    '--route-to-y': `${end.y}%`,
+  } as CSSProperties
+}
+
+function suggestedMapPanFor(project: ProjectDefinition): MapPan {
+  const left = percentNumber(project.position.left)
+  const top = percentNumber(project.position.top)
+  return {
+    x: left < 32 ? 120 : left > 66 ? -130 : 0,
+    y: top < 34 ? 120 : top > 68 ? -150 : 0,
+  }
+}
+
+function clampMapPan(next: MapPan, artboard: HTMLElement | null): MapPan {
+  const world = artboard?.parentElement
+  const artRect = artboard?.getBoundingClientRect()
+  const worldRect = world?.getBoundingClientRect()
+  const maxX = artRect && worldRect ? Math.max(96, (artRect.width - worldRect.width) / 2 + 120) : 360
+  const maxY = artRect && worldRect ? Math.max(96, (artRect.height - worldRect.height) / 2 + 140) : 360
+  return {
+    x: clampNumber(next.x, -maxX, maxX),
+    y: clampNumber(next.y, -maxY, maxY),
+  }
+}
+
+function bossMaxHpFor(_project: ProjectDefinition, _questionCount: number) {
+  return BOSS_MAX_HP
+}
+
+function bossHitDamageFor(questionCount: number) {
+  return Math.ceil(BOSS_MAX_HP / Math.max(1, questionCount))
 }
 
 function getSimulationDateKey() {
   return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai' }).format(new Date())
+}
+
+function formatCountdown(seconds: number) {
+  const safeSeconds = Math.max(0, seconds)
+  const minutes = Math.floor(safeSeconds / 60)
+  const remainingSeconds = safeSeconds % 60
+  return `${String(minutes).padStart(2, '0')}:${String(remainingSeconds).padStart(2, '0')}`
 }
 
 export default function SimulationPage() {
@@ -512,6 +686,17 @@ export default function SimulationPage() {
   const [supplyOpen, setSupplyOpen] = useState(false)
   const [shopOpen, setShopOpen] = useState(false)
   const [trophyOpen, setTrophyOpen] = useState(false)
+  const [leaderboardOpen, setLeaderboardOpen] = useState(false)
+  const [quickPanel, setQuickPanel] = useState<QuickPanel | null>(null)
+  const [learningReportOpen, setLearningReportOpen] = useState(false)
+  const [entryConfirm, setEntryConfirm] = useState<ProjectEntryConfirm | null>(null)
+  const [exitConfirmOpen, setExitConfirmOpen] = useState(false)
+  const [actionSignal, setActionSignal] = useState<ActionSignal | null>(null)
+  const [notice, setNotice] = useState<NoticeMessage | null>(null)
+  const [leaderboardLoading, setLeaderboardLoading] = useState(false)
+  const [leaderboardError, setLeaderboardError] = useState('')
+  const [leaderboardEntries, setLeaderboardEntries] = useState<LeaderboardEntry[]>([])
+  const [currentLeaderboardEntry, setCurrentLeaderboardEntry] = useState<LeaderboardEntry | null>(null)
   const [projectProgress, setProjectProgress] = useState<ProjectProgress>({})
   const [simulationHp, setSimulationHp] = useState(DEMO_HP)
   const [selectedProjectId, setSelectedProjectId] = useState(1)
@@ -534,6 +719,15 @@ export default function SimulationPage() {
   const [outcome, setOutcome] = useState<BattleOutcome | null>(null)
   const [battleReward, setBattleReward] = useState<WalletReward | null>(null)
   const [creditAward, setCreditAward] = useState(0)
+  const [projectXpAward, setProjectXpAward] = useState<ProjectXpAward | null>(null)
+  const [remainingTime, setRemainingTime] = useState(SIMULATION_TIME_LIMIT_SECONDS)
+  const [timedOut, setTimedOut] = useState(false)
+  const [mapPan, setMapPan] = useState<MapPan>({ x: 0, y: 0 })
+  const [mapPanning, setMapPanning] = useState(false)
+  const [routeTravel, setRouteTravel] = useState<RouteTravel | null>(null)
+  const [pendingRouteFromProjectId, setPendingRouteFromProjectId] = useState<number | null>(null)
+  const mapPanRef = useRef<MapPan>(mapPan)
+  const mapDragRef = useRef<MapDragState | null>(null)
 
   useEffect(() => {
     const token = localStorage.getItem('token')
@@ -644,7 +838,20 @@ export default function SimulationPage() {
     }
   }, [launched])
 
+  useEffect(() => {
+    mapPanRef.current = mapPan
+  }, [mapPan])
+
+  useEffect(() => {
+    if (!actionSignal) return
+    const timerId = window.setTimeout(() => {
+      setActionSignal(current => current?.id === actionSignal.id ? null : current)
+    }, 1800)
+    return () => window.clearTimeout(timerId)
+  }, [actionSignal])
+
   const projects = useMemo(() => buildProjectNodes(projectProgress), [projectProgress])
+  const currentUnlockedProject = useMemo(() => getCurrentUnlockedProject(projects), [projects])
   const activeProject = useMemo(() => getProjectDefinition(selectedProjectId), [selectedProjectId])
   const activeProjectNode = useMemo(
     () => projects.find(project => project.id === selectedProjectId) ?? projects[0],
@@ -669,10 +876,26 @@ export default function SimulationPage() {
   const storyQuestions = useMemo(() => buildProjectStoryQuestions(activeProject, educationTrack, selectedCarrier), [activeProject, educationTrack, selectedCarrier])
   const bossQuestions = useMemo(() => buildProjectBossQuestions(activeProject, educationTrack, selectedCarrier), [activeProject, educationTrack, selectedCarrier])
   const bossMaxHp = useMemo(() => bossMaxHpFor(activeProject, bossQuestions.length), [activeProject, bossQuestions.length])
+  const bossHitDamage = useMemo(() => bossHitDamageFor(bossQuestions.length), [bossQuestions.length])
   const currentStory = storyQuestions[storyIndex]
   const currentBoss = bossQuestions[bossIndex]
   const showHubChrome = screen === 'map' || screen === 'levels' || screen === 'briefing'
   const showMapHome = screen === 'map' || screen === 'briefing'
+  const mapPanStyle = useMemo(() => ({
+    '--map-pan-x': `${mapPan.x}px`,
+    '--map-pan-y': `${mapPan.y}px`,
+  }) as CSSProperties, [mapPan.x, mapPan.y])
+
+  const trainingActive = screen === 'story' || screen === 'boss'
+
+  useEffect(() => {
+    if (launched) return
+
+    setSelectedProjectId(currentId => {
+      const currentNode = projects.find(project => project.id === currentId)
+      return currentNode?.status === 'active' ? currentId : currentUnlockedProject.id
+    })
+  }, [currentUnlockedProject.id, launched, projects])
 
   useEffect(() => {
     if (!primaryCarriers.some(carrier => carrier.id === selectedCarrierId)) {
@@ -682,6 +905,20 @@ export default function SimulationPage() {
       setAuxiliaryCase(null)
     }
   }, [carrierRoute.id, primaryCarriers, selectedCarrierId])
+
+  useEffect(() => {
+    if (!trainingActive || timedOut || outcome) return
+
+    const timerId = window.setInterval(() => {
+      setRemainingTime(current => Math.max(0, current - 1))
+    }, 1000)
+    return () => window.clearInterval(timerId)
+  }, [outcome, timedOut, trainingActive])
+
+  useEffect(() => {
+    if (!trainingActive || timedOut || outcome || remainingTime > 0) return
+    failProjectByTimeout()
+  }, [outcome, remainingTime, timedOut, trainingActive])
 
   function updateWallet(update: (current: Wallet) => Wallet) {
     setWallet(current => {
@@ -693,6 +930,54 @@ export default function SimulationPage() {
     })
   }
 
+  function showActionSignal(message: string) {
+    setActionSignal({ id: Date.now(), message })
+  }
+
+  function refreshMotion(message: string) {
+    showActionSignal(message)
+  }
+
+  function openQuickPanel(panel: QuickPanel) {
+    const labels: Record<QuickPanel, string> = {
+      mentor: 'AI 导师已唤起',
+      friends: '好友动态已刷新',
+      skills: '技能树已打开',
+      messages: '消息中心已刷新',
+      settings: '设置面板已打开',
+    }
+    setQuickPanel(panel)
+    showActionSignal(labels[panel])
+  }
+
+  function openLearningReport() {
+    setLearningReportOpen(true)
+    showActionSignal('学习报告已生成')
+  }
+
+  function navigateHub(nextScreen: Screen, message: string) {
+    showActionSignal(message)
+    if (screen === nextScreen) return
+    setScreen(nextScreen)
+  }
+
+  function openSupplyPanel() {
+    setShopOpen(false)
+    setSupplyOpen(true)
+    showActionSignal('补给面板已打开')
+  }
+
+  function openShopPanel() {
+    setSupplyOpen(false)
+    setShopOpen(true)
+    showActionSignal('战备仓库已打开')
+  }
+
+  function openTrophyPanel() {
+    setTrophyOpen(true)
+    showActionSignal('奖杯统计已刷新')
+  }
+
   function syncSimulationHp(nextValue: number) {
     const nextHp = clampHp(nextValue)
     setSimulationHp(nextHp)
@@ -700,24 +985,226 @@ export default function SimulationPage() {
     localStorage.setItem(HP_KEY, String(nextHp))
   }
 
-  function launchSimulation() {
+  function applyMapPan(next: MapPan, artboard: HTMLElement | null) {
+    const clamped = clampMapPan(next, artboard)
+    mapPanRef.current = clamped
+    setMapPan(clamped)
+  }
+
+  function beginMapPan(event: PointerEvent<HTMLDivElement>) {
+    if (event.button !== 0) return
+    const target = event.target as Element
+    if (target.closest('button, a, input, textarea, select, [role="button"]')) return
+
+    mapDragRef.current = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      originX: mapPanRef.current.x,
+      originY: mapPanRef.current.y,
+    }
+    setMapPanning(true)
+    event.currentTarget.setPointerCapture(event.pointerId)
+    event.preventDefault()
+  }
+
+  function moveMapPan(event: PointerEvent<HTMLDivElement>) {
+    const drag = mapDragRef.current
+    if (!drag || drag.pointerId !== event.pointerId) return
+
+    applyMapPan({
+      x: drag.originX + event.clientX - drag.startX,
+      y: drag.originY + event.clientY - drag.startY,
+    }, event.currentTarget)
+    event.preventDefault()
+  }
+
+  function endMapPan(event: PointerEvent<HTMLDivElement>) {
+    const drag = mapDragRef.current
+    if (!drag || drag.pointerId !== event.pointerId) return
+
+    mapDragRef.current = null
+    setMapPanning(false)
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId)
+    }
+  }
+
+  function wheelMapPan(event: WheelEvent<HTMLDivElement>) {
+    const target = event.target as Element
+    if (target.closest('button, a, input, textarea, select, [role="button"]')) return
+
+    applyMapPan({
+      x: mapPanRef.current.x - event.deltaX,
+      y: mapPanRef.current.y - event.deltaY,
+    }, event.currentTarget)
+    event.preventDefault()
+  }
+
+  function recenterMap(project: ProjectDefinition = activeProjectNode) {
+    const nextPan = suggestedMapPanFor(project)
+    mapPanRef.current = nextPan
+    setMapPan(nextPan)
+  }
+
+  function returnToMapFromResult() {
+    if (pendingRouteFromProjectId !== null) {
+      const fromIndex = projects.findIndex(project => project.id === pendingRouteFromProjectId)
+      const nextProject = fromIndex >= 0 ? projects[fromIndex + 1] : undefined
+      if (nextProject) {
+        setSelectedProjectId(nextProject.id)
+        recenterMap(nextProject)
+        setRouteTravel({ fromId: pendingRouteFromProjectId, toId: nextProject.id, key: Date.now() })
+      }
+    }
+
+    setPendingRouteFromProjectId(null)
+    showActionSignal('已返回远征地图')
+    setScreen('map')
+  }
+
+  function openLeaderboard() {
+    showActionSignal('排行榜刷新中')
+    setLeaderboardOpen(true)
+    setLeaderboardLoading(true)
+    setLeaderboardError('')
+    const token = localStorage.getItem('token')
+    if (!token) {
+      setLeaderboardLoading(false)
+      setLeaderboardError('请先登录后查看排行榜')
+      return
+    }
+
+    fetch('/api/game/leaderboard?limit=10', { headers: { Authorization: `Bearer ${token}` } })
+      .then(async response => {
+        if (!response.ok) throw new Error('leaderboard failed')
+        return await response.json() as { entries: LeaderboardEntry[]; currentUser: LeaderboardEntry | null }
+      })
+      .then(data => {
+        setLeaderboardEntries(data.entries ?? [])
+        setCurrentLeaderboardEntry(data.currentUser ?? null)
+      })
+      .catch(() => {
+        setLeaderboardError('排行榜暂时无法加载，请稍后再试')
+        setLeaderboardEntries([])
+        setCurrentLeaderboardEntry(null)
+      })
+      .finally(() => setLeaderboardLoading(false))
+  }
+
+  async function awardProjectCompletionXp(project: ProjectDefinition, medal: Exclude<ProjectMedal, 'none'>, projectScore: number) {
+    const token = localStorage.getItem('token')
+    if (!token) return
+
+    try {
+      const response = await fetch('/api/game/project-xp', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          projectId: project.id,
+          projectTitle: project.title,
+          medal,
+          projectScore,
+          finalBoss: Boolean(project.finalBoss),
+        }),
+      })
+      if (!response.ok) throw new Error('project xp failed')
+      const award = await response.json() as ProjectXpAward
+      setProjectXpAward(award)
+      setPlayer(current => ({
+        ...current,
+        xp: award.newXp,
+        rankLevel: award.rankLevel,
+        rankTitle: award.rankTitle,
+        rankProgress: award.rankProgress,
+      }))
+    } catch {
+      setProjectXpAward({
+        xpGained: 0,
+        rewardXp: 0,
+        alreadyClaimed: false,
+        newXp: player.xp,
+        rankLevel: player.rankLevel,
+        rankTitle: player.rankTitle,
+        rankProgress: player.rankProgress,
+        xpToNext: 0,
+        leveledUp: false,
+        message: '项目 XP 发放暂时失败，请稍后重试',
+      })
+    }
+  }
+
+  function requestLaunchSimulation() {
+    const currentNode = projects.find(project => project.id === selectedProjectId)
+    const launchProjectId = currentNode?.status === 'active' ? selectedProjectId : currentUnlockedProject.id
+    setEntryConfirm({ projectId: launchProjectId, returnScreen: 'map', fromLaunch: true })
+    showActionSignal('进入确认已打开')
+  }
+
+  function launchSimulation(projectId = selectedProjectId) {
+    const launchProjectId = projects.find(project => project.id === projectId)?.status === 'active' ? projectId : currentUnlockedProject.id
+    const launchProject = projects.find(project => project.id === launchProjectId) ?? currentUnlockedProject
+    if (launchProjectId !== selectedProjectId) setSelectedProjectId(launchProjectId)
+    recenterMap(launchProject)
     setSupplyOpen(false)
     setShopOpen(false)
     setScreen('map')
     setLaunched(true)
+    showActionSignal('已进入全屏实训')
+  }
+
+  function requestLeaveSimulation() {
+    if (screen === 'briefing' || screen === 'story' || screen === 'boss' || (screen === 'result' && !outcome?.victory)) {
+      setExitConfirmOpen(true)
+      showActionSignal('退出确认已打开')
+      return
+    }
+    leaveSimulation()
   }
 
   function leaveSimulation() {
     setSupplyOpen(false)
     setShopOpen(false)
     setTrophyOpen(false)
+    setLeaderboardOpen(false)
+    setEntryConfirm(null)
+    setExitConfirmOpen(false)
+    setMapPanning(false)
+    setPendingRouteFromProjectId(null)
+    mapDragRef.current = null
     setScreen('map')
     setLaunched(false)
+  }
+
+  function requestEnterProject(projectId = selectedProjectId, returnScreen: 'map' | 'levels' = 'map') {
+    const target = projects.find(project => project.id === projectId)
+    if (!target) return
+    if (target.status === 'locked') {
+      showActionSignal('该项目尚未解锁')
+      return
+    }
+    setEntryConfirm({ projectId, returnScreen })
+    showActionSignal('项目进入确认已打开')
+  }
+
+  function confirmProjectEntry() {
+    if (!entryConfirm) return
+    const confirmedEntry = entryConfirm
+    setEntryConfirm(null)
+    if (confirmedEntry.fromLaunch) {
+      launchSimulation(confirmedEntry.projectId)
+      return
+    }
+    enterProject(confirmedEntry.projectId, confirmedEntry.returnScreen)
   }
 
   function enterProject(projectId = selectedProjectId, returnScreen: 'map' | 'levels' = 'map') {
     const target = projects.find(project => project.id === projectId)
     if (!target || target.status === 'locked') return
+    showActionSignal('正在进入项目现场')
     setSelectedProjectId(projectId)
     setStoryIndex(0)
     setStoryAnswers([])
@@ -726,16 +1213,42 @@ export default function SimulationPage() {
     setOutcome(null)
     setBattleReward(null)
     setCreditAward(0)
+    setProjectXpAward(null)
+    setRemainingTime(SIMULATION_TIME_LIMIT_SECONDS)
+    setTimedOut(false)
+    setPendingRouteFromProjectId(null)
     setBriefingReturnScreen(returnScreen)
     setScreen('briefing')
   }
 
   function startStory() {
+    showActionSignal('剧情调查已启动')
     setStoryIndex(0)
     setStoryAnswers([])
     setStoryScore(0)
     setStoryFinished(false)
+    setRemainingTime(SIMULATION_TIME_LIMIT_SECONDS)
+    setTimedOut(false)
     setScreen('story')
+  }
+
+  function failProjectByTimeout() {
+    setTimedOut(true)
+    setBattleReward(REVIEW_REWARD)
+    setCreditAward(0)
+    setProjectXpAward(null)
+    setPendingRouteFromProjectId(null)
+    setOutcome({
+      victory: false,
+      correct: battleCorrect,
+      total: screen === 'boss' ? bossIndex + 1 : 0,
+      hp: battleHp,
+      bossHp,
+      medal: 'none',
+      projectScore: Math.round(storyScore / 2),
+      timedOut: true,
+    })
+    setScreen('result')
   }
 
   function chooseAnswer(id: string, question: TrainingQuestion, section: 'story' | 'boss') {
@@ -746,6 +1259,7 @@ export default function SimulationPage() {
   }
 
   function submitStoryAnswer() {
+    if (timedOut) return
     if (!storyAnswers.length) return
     const nextScore = storyScore + (answersMatch(storyAnswers, currentStory) ? currentStory.points : 0)
     setStoryScore(nextScore)
@@ -758,23 +1272,28 @@ export default function SimulationPage() {
   }
 
   function startBoss() {
-    if (storyScore < STORY_PASS_SCORE) return
+    if (timedOut || storyScore < STORY_PASS_SCORE) return
+    showActionSignal('终场 Boss 核验已启动')
     setBossIndex(0)
     setBossAnswers([])
     setBossHp(bossMaxHp)
-    setBattleHp(simulationHp)
+    syncSimulationHp(SIMULATION_MAX_HP)
     setBattleCorrect(0)
     setDamageBoost(false)
     setScreen('boss')
   }
 
   function resolveBossTurn(hit: boolean, itemDamage = 0) {
-    const boostDamage = hit && damageBoost ? 35 : 0
+    if (timedOut) return
+    const boostDamage = hit && damageBoost ? BOSS_BOOST_DAMAGE : 0
+    const attackDamage = (hit ? bossHitDamage + boostDamage : 0) + itemDamage
+    const hpPenalty = !hit && itemDamage === 0 ? PLAYER_MISS_DAMAGE : 0
     const nextCorrect = battleCorrect + (hit ? 1 : 0)
-    const nextBossHp = Math.max(0, bossHp - (hit ? BOSS_HIT_DAMAGE + itemDamage + boostDamage : 0))
-    const nextHp = Math.max(0, battleHp - (hit ? 0 : 8))
+    const nextBossHp = Math.max(0, bossHp - attackDamage)
+    const nextHp = Math.max(0, battleHp - hpPenalty)
     const answered = bossIndex + 1
-    const finished = nextHp === 0 || bossIndex === bossQuestions.length - 1 || (!activeProject.finalBoss && nextBossHp === 0)
+    const bossDefeated = nextBossHp === 0
+    const finished = nextHp === 0 || bossDefeated || bossIndex === bossQuestions.length - 1
 
     if (hit && damageBoost) setDamageBoost(false)
     setBattleCorrect(nextCorrect)
@@ -784,7 +1303,7 @@ export default function SimulationPage() {
     if (finished) {
       const accuracy = Math.round((nextCorrect / answered) * 100)
       const projectScore = Math.round((storyScore + accuracy) / 2)
-      const victory = activeProject.finalBoss ? projectScore >= STORY_PASS_SCORE : nextBossHp === 0 && projectScore >= STORY_PASS_SCORE
+      const victory = bossDefeated && nextHp > 0 && projectScore >= STORY_PASS_SCORE
       const medal: MedalTier = victory ? medalFromScore(projectScore) : 'none'
       const previousMedal = getProjectMedal(projectProgress, activeProject.id)
       const isNewTrophy = victory && previousMedal === 'none'
@@ -822,7 +1341,12 @@ export default function SimulationPage() {
       }
       setBattleReward(earnedReward)
       setCreditAward(earnedCredit)
+      setProjectXpAward(null)
+      setPendingRouteFromProjectId(victory && isNewTrophy ? activeProject.id : null)
       setOutcome({ victory, correct: nextCorrect, total: answered, hp: nextHp, bossHp: nextBossHp, medal, projectScore })
+      if (victory && medal !== 'none') {
+        void awardProjectCompletionXp(activeProject, medal, projectScore)
+      }
       setScreen('result')
       return
     }
@@ -837,95 +1361,178 @@ export default function SimulationPage() {
 
   function buyProduct(product: StoreProduct, currency: 'coins' | 'gems') {
     const cost = currency === 'coins' ? product.coinPrice : product.gemPrice
-    if (wallet[currency] < cost) return
+    if (wallet[currency] < cost) {
+      showActionSignal('资源不足，已响应点击')
+      return
+    }
     updateWallet(current => current[currency] < cost ? current : ({
       ...current,
       [currency]: current[currency] - cost,
       inventory: { ...current.inventory, [product.id]: current.inventory[product.id] + 1 },
     }))
+    showActionSignal(`${product.name}已加入战备仓库`)
   }
 
   function claimDailySupply() {
     const today = getSimulationDateKey()
+    if (wallet.lastDailySupplyDate === today) {
+      setNotice({
+        tone: 'info',
+        title: '今日补给已领取',
+        message: '每日补给已经入账，明天可再次领取。',
+        actionLabel: '知道了',
+      })
+      return
+    }
     updateWallet(current => current.lastDailySupplyDate === today ? current : ({
       ...current,
       coins: current.coins + DAILY_SUPPLY_REWARD.coins,
       gems: current.gems + DAILY_SUPPLY_REWARD.gems,
       lastDailySupplyDate: today,
     }))
+    setNotice({
+      tone: 'success',
+      title: '补给领取完成',
+      message: `已到账 +${DAILY_SUPPLY_REWARD.coins} 金币、+${DAILY_SUPPLY_REWARD.gems} 钻石，资源已同步到右上角面板。`,
+      actionLabel: '收下补给',
+    })
+    showActionSignal('补给已入账')
   }
 
   function chooseAuxiliaryCase() {
     setAuxiliaryCase(pickAuxiliaryCase(auxiliaryPool, auxiliaryCase?.productName))
+    showActionSignal('辅助案例已刷新')
   }
 
   function selectPrimaryCarrier(carrierId: string) {
     localStorage.setItem(`${CARRIER_KEY_PREFIX}:${carrierRoute.id}`, carrierId)
     setSelectedCarrierId(carrierId)
     setAuxiliaryCase(null)
+    showActionSignal('主案例已切换')
   }
 
   function useItem(item: ItemId) {
-    if (wallet.inventory[item] < 1 || screen !== 'boss') return
-    if (item === 'boost' && damageBoost) return
-    if (item === 'heal' && battleHp >= 100) return
+    if (wallet.inventory[item] < 1 || screen !== 'boss') {
+      showActionSignal('道具暂不可用')
+      return
+    }
+    if (item === 'boost' && damageBoost) {
+      showActionSignal('增幅器已装载')
+      return
+    }
+    if (item === 'heal' && battleHp >= SIMULATION_MAX_HP) {
+      showActionSignal('HP 已满，无需补给')
+      return
+    }
     updateWallet(current => current.inventory[item] < 1 ? current : ({
       ...current,
       inventory: { ...current.inventory, [item]: current.inventory[item] - 1 },
     }))
     if (item === 'skip') {
-      resolveBossTurn(true)
+      showActionSignal('跳题卡已使用')
+      resolveBossTurn(false, BOSS_SKIP_DAMAGE)
       return
     }
     if (item === 'boost') {
       setDamageBoost(true)
+      showActionSignal('增幅器已装载')
       return
     }
-    syncSimulationHp(battleHp + 25)
+    syncSimulationHp(battleHp + HEAL_AMOUNT)
+    showActionSignal('补给包已使用')
   }
+
+  const entryProject = entryConfirm ? projects.find(project => project.id === entryConfirm.projectId) ?? activeProjectNode : null
 
   if (!launched) {
     return (
-      <LaunchPanel
-        displayName={displayName}
-        player={player}
-        wallet={wallet}
-        trophySummary={trophySummary}
-        creditSummary={creditSummary}
-        educationTrack={educationTrack}
-        major={major}
-        project={activeProject}
-        carrier={selectedCarrier}
-        onLaunch={launchSimulation}
-      />
+      <>
+        <LaunchPanel
+          displayName={displayName}
+          player={player}
+          wallet={wallet}
+          trophySummary={trophySummary}
+          creditSummary={creditSummary}
+          educationTrack={educationTrack}
+          major={major}
+          project={activeProject}
+          carrier={selectedCarrier}
+          onLaunch={requestLaunchSimulation}
+          onLeaderboard={openLeaderboard}
+        />
+        {actionSignal && <ActionSignalToast key={actionSignal.id} message={actionSignal.message} />}
+        {entryConfirm && entryProject && (
+          <ProjectEntryModal
+            project={entryProject}
+            carrier={selectedCarrier}
+            fromLaunch={entryConfirm.fromLaunch}
+            onConfirm={confirmProjectEntry}
+            onCancel={() => setEntryConfirm(null)}
+          />
+        )}
+        {notice && <NoticeModal notice={notice} onClose={() => setNotice(null)} />}
+        {leaderboardOpen && (
+          <LeaderboardModal
+            entries={leaderboardEntries}
+            currentUser={currentLeaderboardEntry}
+            loading={leaderboardLoading}
+            error={leaderboardError}
+            onRefresh={openLeaderboard}
+            onClose={() => setLeaderboardOpen(false)}
+          />
+        )}
+      </>
     )
   }
 
   return (
     <div className={`${styles.root} ${styles.fullscreenRoot}`}>
       <main className={styles.world} aria-label="质量守护远征游戏地图">
+        {actionSignal && <ActionSignalToast key={actionSignal.id} message={actionSignal.message} />}
         {showMapHome && (
-          <div className={styles.mapArtboard}>
+          <div
+            className={`${styles.mapArtboard} ${mapPanning ? styles.mapArtboardPanning : ''}`}
+            style={mapPanStyle}
+            onPointerDown={beginMapPan}
+            onPointerMove={moveMapPan}
+            onPointerUp={endMapPan}
+            onPointerCancel={endMapPan}
+            onWheel={wheelMapPan}
+          >
             <Image src="/simulation/map-background.webp" alt="" fill sizes="100vw" priority className={styles.mapImage} />
             <div className={styles.mapShade} />
-            <ProjectMap projects={projects} onEnterProject={projectId => enterProject(projectId, 'map')} interactive={screen === 'map' || screen === 'briefing'} />
+            <RouteLayer projects={projects} travel={routeTravel} avatarUrl={avatarUrl} displayName={displayName} />
+            <ProjectMap projects={projects} onEnterProject={projectId => requestEnterProject(projectId, 'map')} interactive={screen === 'map' || screen === 'briefing'} />
           </div>
         )}
         {showHubChrome && (
           <>
             <GameRail
-              screen={screen}
-              onMap={() => setScreen('map')}
-              onLevels={() => setScreen('levels')}
-              onTask={() => enterProject(selectedProjectId, screen === 'levels' ? 'levels' : 'map')}
-              onSupply={() => setSupplyOpen(true)}
-              onShop={() => setShopOpen(true)}
+              onLeaderboard={openLeaderboard}
+              onBackpack={openShopPanel}
+              onSkills={() => openQuickPanel('skills')}
+              onTools={openSupplyPanel}
             />
             <FloatingHeader
               title={screen === 'levels' ? '远征关卡档案' : '质量守护远征'}
-              onExit={leaveSimulation}
+              onExit={requestLeaveSimulation}
             />
-            <ResourceDock wallet={wallet} trophySummary={trophySummary} creditSummary={creditSummary} onSupply={() => setSupplyOpen(true)} onShop={() => setShopOpen(true)} onTrophies={() => setTrophyOpen(true)} />
+            <HubNavTabs
+              screen={screen}
+              onMap={() => navigateHub('map', '已切换地图主页')}
+              onLevels={() => navigateHub('levels', '已切换关卡总览')}
+              onTask={() => requestEnterProject(selectedProjectId, screen === 'levels' ? 'levels' : 'map')}
+            />
+            <ResourceDock wallet={wallet} trophySummary={trophySummary} creditSummary={creditSummary} onSupply={openSupplyPanel} onShop={openShopPanel} onTrophies={openTrophyPanel} />
+            <TopActionDock
+              onMessages={() => openQuickPanel('messages')}
+              onSettings={() => openQuickPanel('settings')}
+            />
+            <SocialDock
+              onMentor={() => openQuickPanel('mentor')}
+              onFriends={() => openQuickPanel('friends')}
+              onReport={openLearningReport}
+            />
             <div className={styles.progressBadge}>
               <Target size={17} />
               <span>远征进度</span>
@@ -937,13 +1544,19 @@ export default function SimulationPage() {
         {screen === 'levels' && (
           <LevelHub
             projects={projects}
-            onEnterProject={projectId => enterProject(projectId, 'levels')}
-            onMap={() => setScreen('map')}
+            onEnterProject={projectId => requestEnterProject(projectId, 'levels')}
+            onMap={() => navigateHub('map', '已切换地图主页')}
           />
         )}
 
         {showMapHome && (
           <>
+            <button type="button" className={styles.mapRecenterButton} onClick={() => {
+              recenterMap(activeProjectNode)
+              refreshMotion('地图定位已刷新')
+            }} aria-label="地图复位">
+              <Target size={17} />
+            </button>
             <div className={styles.mapLegend}>
               <span><i className={styles.clearedDot} />已通关</span>
               <span><i className={styles.activeDot} />进行中</span>
@@ -963,9 +1576,10 @@ export default function SimulationPage() {
                   educationTrack={educationTrack}
                   project={activeProject}
                   carrier={selectedCarrier}
-                  onEnterProject={() => enterProject(selectedProjectId, 'map')}
-                  onShop={() => setShopOpen(true)}
-                  onTrophies={() => setTrophyOpen(true)}
+                  onEnterProject={() => requestEnterProject(selectedProjectId, 'map')}
+                  onShop={openShopPanel}
+                  onTrophies={openTrophyPanel}
+                  onLeaderboard={openLeaderboard}
                 />
               )}
               {screen === 'briefing' && (
@@ -982,7 +1596,7 @@ export default function SimulationPage() {
                   selectedRole={selectedRole}
                   storyAnswerKey={activeProject.id === 1 ? answerKeyFor(storyQuestions) : []}
                   bossAnswerKey={activeProject.id === 1 ? answerKeyFor(bossQuestions) : []}
-                  onBack={() => setScreen(briefingReturnScreen)}
+                  onBack={() => navigateHub(briefingReturnScreen, briefingReturnScreen === 'levels' ? '已返回关卡总览' : '已返回地图主页')}
                   onSelectCarrier={selectPrimaryCarrier}
                   onDrawAuxiliary={chooseAuxiliaryCase}
                   onBegin={startStory}
@@ -1004,8 +1618,10 @@ export default function SimulationPage() {
             answers={storyAnswers}
             score={storyScore}
             finished={storyFinished}
-            onBack={() => setScreen('briefing')}
-            onExit={leaveSimulation}
+            remainingTime={remainingTime}
+            timedOut={timedOut}
+            onBack={() => navigateHub('briefing', '已返回调查简报')}
+            onExit={requestLeaveSimulation}
             onSelectAnswer={id => chooseAnswer(id, currentStory, 'story')}
             onContinue={submitStoryAnswer}
             onRetry={startStory}
@@ -1023,23 +1639,27 @@ export default function SimulationPage() {
             hp={battleHp}
             bossHp={bossHp}
             bossMaxHp={bossMaxHp}
+            bossHitDamage={bossHitDamage}
+            playerMissDamage={PLAYER_MISS_DAMAGE}
             correct={battleCorrect}
             question={currentBoss}
             questionIndex={bossIndex}
             answers={bossAnswers}
             wallet={wallet}
             damageBoost={damageBoost}
-            onBack={() => setScreen('story')}
-            onExit={leaveSimulation}
+            remainingTime={remainingTime}
+            timedOut={timedOut}
+            onBack={() => navigateHub('story', '已返回剧情调查')}
+            onExit={requestLeaveSimulation}
             onSelectAnswer={id => chooseAnswer(id, currentBoss, 'boss')}
             onSubmit={submitBossAction}
             onUseItem={useItem}
-            onShop={() => setShopOpen(true)}
+            onShop={openShopPanel}
           />
         )}
 
         {screen === 'result' && selectedRole && outcome && (
-          <ResultPanel project={activeProject} role={selectedRole} educationTrack={educationTrack} carrier={selectedCarrier} outcome={outcome} reward={battleReward} storyScore={storyScore} creditAward={creditAward} onMap={() => setScreen('map')} onReplay={() => enterProject(activeProject.id, 'map')} onExit={leaveSimulation} />
+          <ResultPanel project={activeProject} role={selectedRole} educationTrack={educationTrack} carrier={selectedCarrier} outcome={outcome} reward={battleReward} storyScore={storyScore} creditAward={creditAward} xpAward={projectXpAward} remainingTime={remainingTime} onMap={returnToMapFromResult} onReplay={() => requestEnterProject(activeProject.id, 'map')} onExit={requestLeaveSimulation} />
         )}
 
         {supplyOpen && (
@@ -1056,7 +1676,7 @@ export default function SimulationPage() {
             onBuy={buyProduct}
             onFindSupply={() => {
               setShopOpen(false)
-              setSupplyOpen(true)
+              openSupplyPanel()
             }}
           />
         )}
@@ -1069,7 +1689,310 @@ export default function SimulationPage() {
             onClose={() => setTrophyOpen(false)}
           />
         )}
+        {leaderboardOpen && (
+          <LeaderboardModal
+            entries={leaderboardEntries}
+            currentUser={currentLeaderboardEntry}
+            loading={leaderboardLoading}
+            error={leaderboardError}
+            onRefresh={openLeaderboard}
+            onClose={() => setLeaderboardOpen(false)}
+          />
+        )}
+        {quickPanel && (
+          <QuickPanelModal
+            panel={quickPanel}
+            player={player}
+            wallet={wallet}
+            project={activeProject}
+            trophySummary={trophySummary}
+            creditSummary={creditSummary}
+            onClose={() => setQuickPanel(null)}
+          />
+        )}
+        {learningReportOpen && (
+          <LearningReportModal
+            projects={projects}
+            progress={projectProgress}
+            player={player}
+            wallet={wallet}
+            trophySummary={trophySummary}
+            creditSummary={creditSummary}
+            onClose={() => setLearningReportOpen(false)}
+          />
+        )}
+        {entryConfirm && entryProject && (
+          <ProjectEntryModal
+            project={entryProject}
+            carrier={selectedCarrier}
+            fromLaunch={entryConfirm.fromLaunch}
+            onConfirm={confirmProjectEntry}
+            onCancel={() => setEntryConfirm(null)}
+          />
+        )}
+        {exitConfirmOpen && (
+          <ExitConfirmModal
+            project={activeProject}
+            onConfirm={leaveSimulation}
+            onCancel={() => setExitConfirmOpen(false)}
+          />
+        )}
+        {notice && <NoticeModal notice={notice} onClose={() => setNotice(null)} />}
       </main>
+    </div>
+  )
+}
+
+function ActionSignalToast({ message }: { message: string }) {
+  return (
+    <div className={styles.actionSignal} role="status" aria-live="polite">
+      <Sparkles size={16} />
+      <span>{message}</span>
+    </div>
+  )
+}
+
+function ProjectEntryModal({
+  project,
+  carrier,
+  fromLaunch,
+  onConfirm,
+  onCancel,
+}: {
+  project: ProjectNode
+  carrier: CarrierCase
+  fromLaunch?: boolean
+  onConfirm: () => void
+  onCancel: () => void
+}) {
+  return (
+    <div className={styles.modalScrim} role="presentation" onMouseDown={onCancel}>
+      <section className={styles.confirmModal} role="dialog" aria-modal="true" aria-labelledby="entry-confirm-title" onMouseDown={event => event.stopPropagation()}>
+        <button type="button" className={styles.closeButton} onClick={onCancel} aria-label="关闭进入确认"><X size={19} /></button>
+        <div className={styles.confirmIcon}><ShieldCheck size={31} /></div>
+        <p className={styles.eyebrow}>{fromLaunch ? 'FULLSCREEN ENTRY' : 'PROJECT ENTRY'}</p>
+        <h2 id="entry-confirm-title">是否进入项目？</h2>
+        <p>即将进入「{project.title}」。进入后会加载项目简报、案例角色与限时训练进度。</p>
+        <div className={styles.confirmSummary}>
+          <span><FileSearch size={16} />{carrier.productName}</span>
+          <span><Clock3 size={16} />{Math.floor(SIMULATION_TIME_LIMIT_SECONDS / 60)} 分钟</span>
+          <span><Target size={16} />{project.curriculum}</span>
+        </div>
+        <div className={styles.confirmActions}>
+          <button type="button" className={styles.secondaryButton} onClick={onCancel}>再看一下</button>
+          <button type="button" className={styles.primaryButton} onClick={onConfirm}>确认进入 <ArrowRight size={18} /></button>
+        </div>
+      </section>
+    </div>
+  )
+}
+
+function ExitConfirmModal({ project, onConfirm, onCancel }: { project: ProjectDefinition; onConfirm: () => void; onCancel: () => void }) {
+  return (
+    <div className={styles.modalScrim} role="presentation" onMouseDown={onCancel}>
+      <section className={`${styles.confirmModal} ${styles.exitConfirmModal}`} role="dialog" aria-modal="true" aria-labelledby="exit-confirm-title" onMouseDown={event => event.stopPropagation()}>
+        <button type="button" className={styles.closeButton} onClick={onCancel} aria-label="关闭退出确认"><X size={19} /></button>
+        <div className={styles.confirmIcon}><ShieldAlert size={31} /></div>
+        <p className={styles.eyebrow}>EXIT CHECK</p>
+        <h2 id="exit-confirm-title">该项目还没完成，是否退出？</h2>
+        <p>「{project.title}」当前还没有形成通关结算。退出后本次剧情或战斗进度不会记入项目成绩。</p>
+        <div className={styles.confirmActions}>
+          <button type="button" className={styles.secondaryButton} onClick={onCancel}>继续训练</button>
+          <button type="button" className={`${styles.primaryButton} ${styles.dangerButton}`} onClick={onConfirm}>确认退出 <ArrowRight size={18} /></button>
+        </div>
+      </section>
+    </div>
+  )
+}
+
+function NoticeModal({ notice, onClose }: { notice: NoticeMessage; onClose: () => void }) {
+  const Icon = notice.tone === 'success' ? CheckCircle2 : notice.tone === 'warning' ? ShieldAlert : Sparkles
+  return (
+    <div className={styles.modalScrim} role="presentation" onMouseDown={onClose}>
+      <section className={`${styles.noticeModal} ${styles[`notice${notice.tone[0].toUpperCase()}${notice.tone.slice(1)}`]}`} role="dialog" aria-modal="true" aria-labelledby="notice-title" onMouseDown={event => event.stopPropagation()}>
+        <div className={styles.noticeIcon}><Icon size={32} /></div>
+        <p className={styles.eyebrow}>SYSTEM FEEDBACK</p>
+        <h2 id="notice-title">{notice.title}</h2>
+        <p>{notice.message}</p>
+        <button type="button" className={styles.primaryButton} onClick={onClose}>{notice.actionLabel ?? '知道了'}</button>
+      </section>
+    </div>
+  )
+}
+
+function QuickPanelModal({
+  panel,
+  player,
+  wallet,
+  project,
+  trophySummary,
+  creditSummary,
+  onClose,
+}: {
+  panel: QuickPanel
+  player: PlayerState
+  wallet: Wallet
+  project: ProjectDefinition
+  trophySummary: TrophySummary
+  creditSummary: ReturnType<typeof summarizeCredit>
+  onClose: () => void
+}) {
+  const supplyCount = wallet.inventory.skip + wallet.inventory.boost + wallet.inventory.heal
+  const config = {
+    mentor: {
+      icon: Bot,
+      eyebrow: 'AI MENTOR',
+      title: 'AI导师',
+      intro: `建议先围绕「${project.title}」整理证据链，再进入 Boss 核验。遇到不确定项时，优先排查 GMP 条款、记录完整性和人员职责。`,
+      rows: [
+        ['当前等级', `Lv.${player.rankLevel} ${player.rankTitle}`],
+        ['本关建议', '先看任务简报，再进入五关调查'],
+        ['提问方向', '法规依据 / 风险判断 / CAPA 思路'],
+      ],
+    },
+    friends: {
+      icon: UsersRound,
+      eyebrow: 'FRIENDS',
+      title: '好友动态',
+      intro: '好友入口已放在右下角，后续可接入班级同伴、互助邀请和通关记录。当前先展示轻量动态，点击有明确反馈。',
+      rows: [
+        ['同伴状态', '3 人在线学习'],
+        ['互助提示', '可围绕同一项目交换证据线索'],
+        ['挑战建议', '通关后刷新排行榜更明显'],
+      ],
+    },
+    skills: {
+      icon: BrainCircuit,
+      eyebrow: 'SKILL TREE',
+      title: '技能树',
+      intro: '技能树按法规理解、现场调查、偏差分析、CAPA 输出四条能力线组织，后续可根据通关项目自动点亮节点。',
+      rows: [
+        ['已获奖章', `${trophySummary.total} 枚`],
+        ['课时分', `${creditSummary.gameEarned} / ${creditSummary.gameRequired}`],
+        ['道具储备', `${supplyCount} 件`],
+      ],
+    },
+    messages: {
+      icon: Bell,
+      eyebrow: 'MESSAGES',
+      title: '消息',
+      intro: '今日消息已汇总到顶部右侧，后续可以接任务提醒、通关奖励和老师点评。',
+      rows: [
+        ['任务提醒', `当前可进入「${project.title}」`],
+        ['补给提醒', wallet.lastDailySupplyDate === getSimulationDateKey() ? '今日补给已领取' : '今日补给待领取'],
+        ['排行榜', '通关后 XP 会计入排名'],
+      ],
+    },
+    settings: {
+      icon: Settings,
+      eyebrow: 'SETTINGS',
+      title: '设置',
+      intro: '设置入口已移到顶部最右侧。当前保留轻量面板，避免打断实训流程，后续可接音量、动画强度和辅助提示。',
+      rows: [
+        ['界面模式', '沉浸式导航'],
+        ['动画强度', '精简过渡'],
+        ['提示反馈', '点击即显示状态'],
+      ],
+    },
+  }[panel]
+  const Icon = config.icon
+
+  return (
+    <div className={styles.modalScrim} role="presentation" onMouseDown={onClose}>
+      <section className={styles.quickPanelModal} role="dialog" aria-modal="true" aria-labelledby="quick-panel-title" onMouseDown={event => event.stopPropagation()}>
+        <button type="button" className={styles.closeButton} onClick={onClose} aria-label="关闭面板"><X size={19} /></button>
+        <header className={styles.quickPanelHeader}>
+          <div className={styles.quickPanelIcon}><Icon size={28} /></div>
+          <div>
+            <p className={styles.eyebrow}>{config.eyebrow}</p>
+            <h2 id="quick-panel-title">{config.title}</h2>
+          </div>
+        </header>
+        <p className={styles.quickPanelIntro}>{config.intro}</p>
+        <div className={styles.quickPanelStats}>
+          {config.rows.map(([label, value]) => (
+            <div key={label}>
+              <span>{label}</span>
+              <strong>{value}</strong>
+            </div>
+          ))}
+        </div>
+        <button type="button" className={styles.primaryButton} onClick={onClose}>知道了</button>
+      </section>
+    </div>
+  )
+}
+
+function LearningReportModal({
+  projects,
+  progress,
+  player,
+  wallet,
+  trophySummary,
+  creditSummary,
+  onClose,
+}: {
+  projects: ProjectNode[]
+  progress: ProjectProgress
+  player: PlayerState
+  wallet: Wallet
+  trophySummary: TrophySummary
+  creditSummary: ReturnType<typeof summarizeCredit>
+  onClose: () => void
+}) {
+  const regularProjects = projects.filter(project => !project.finalBoss)
+  const completedProjects = regularProjects.filter(project => project.status === 'cleared')
+  const progressPercent = regularProjects.length ? Math.round((completedProjects.length / regularProjects.length) * 100) : 0
+  const creditPercent = creditSummary.gameRequired ? Math.min(100, Math.round((creditSummary.gameEarned / creditSummary.gameRequired) * 100)) : 0
+  const latestProject = [...completedProjects].reverse()[0]
+  const supplyCount = wallet.inventory.skip + wallet.inventory.boost + wallet.inventory.heal
+
+  return (
+    <div className={styles.modalScrim} role="presentation" onMouseDown={onClose}>
+      <section className={styles.learningReportModal} role="dialog" aria-modal="true" aria-labelledby="learning-report-title" onMouseDown={event => event.stopPropagation()}>
+        <button type="button" className={styles.closeButton} onClick={onClose} aria-label="关闭学习报告"><X size={19} /></button>
+        <header className={styles.reportHeader}>
+          <div className={styles.modalIcon}><BookOpen size={30} /></div>
+          <div>
+            <p className={styles.eyebrow}>LEARNING REPORT</p>
+            <h2 id="learning-report-title">学习报告</h2>
+            <span>按当前本地通关记录统计，展示通关进度、课时分、XP 和道具储备。</span>
+          </div>
+        </header>
+
+        <section className={styles.reportHero}>
+          <div>
+            <span>通关进度</span>
+            <strong>{completedProjects.length} / {regularProjects.length}</strong>
+          </div>
+          <div className={styles.reportProgress}>
+            <progress value={progressPercent} max={100} aria-label="通关进度" />
+            <span>{progressPercent}%</span>
+          </div>
+          <p>{latestProject ? `最近通关：${latestProject.title}` : '还没有通关记录，先完成当前解锁项目即可生成完整报告。'}</p>
+        </section>
+
+        <div className={styles.reportStatsGrid}>
+          <div><GraduationCap size={18} /><span>获得课时分</span><strong>{creditSummary.gameEarned} / {creditSummary.gameRequired}</strong><small>{creditPercent}%</small></div>
+          <div><Sparkles size={18} /><span>当前 XP</span><strong>{player.xp.toLocaleString()}</strong><small>Lv.{player.rankLevel}</small></div>
+          <div><Trophy size={18} /><span>奖章</span><strong>{trophySummary.total}</strong><small>金 {trophySummary.gold} / 银 {trophySummary.silver} / 铜 {trophySummary.bronze}</small></div>
+          <div><Backpack size={18} /><span>背包道具</span><strong>{supplyCount}</strong><small>跳题 {wallet.inventory.skip} · 增幅 {wallet.inventory.boost} · 补给 {wallet.inventory.heal}</small></div>
+        </div>
+
+        <div className={styles.reportTimeline}>
+          {regularProjects.slice(0, 6).map(project => {
+            const record = progress[projectKey(project.id)]
+            const statusLabel = project.status === 'cleared' ? '已通关' : project.status === 'active' ? '进行中' : '待解锁'
+            return (
+              <div key={project.id}>
+                <span>{String(project.id).padStart(2, '0')}</span>
+                <strong>{project.title}</strong>
+                <em>{record ? `${record.creditHours} 课时分 · ${medalLabel(record.medal)}` : statusLabel}</em>
+              </div>
+            )
+          })}
+        </div>
+      </section>
     </div>
   )
 }
@@ -1085,6 +2008,7 @@ function LaunchPanel({
   project,
   carrier,
   onLaunch,
+  onLeaderboard,
 }: {
   displayName: string
   player: PlayerState
@@ -1096,8 +2020,15 @@ function LaunchPanel({
   project: ProjectDefinition
   carrier: CarrierCase
   onLaunch: () => void
+  onLeaderboard: () => void
 }) {
   const supplies = wallet.inventory.skip + wallet.inventory.boost + wallet.inventory.heal
+  const projectBaseXp = project.finalBoss ? FINAL_BOSS_COMPLETION_BASE_XP : PROJECT_COMPLETION_BASE_XP
+  const projectMinimumXp = projectBaseXp + PROJECT_MEDAL_BONUS_XP.bronze
+  const previewStyle = {
+    '--preview-x': project.position.left,
+    '--preview-y': project.position.top,
+  } as CSSProperties
 
   return (
     <div className={`${styles.root} ${styles.launchRoot}`}>
@@ -1117,19 +2048,36 @@ function LaunchPanel({
               </div>
               <div className={styles.caseTags}>
                 <span><FileSearch size={14} /> {carrier.dosageForm}案例</span>
-                <span><Clock3 size={14} /> 90 分钟</span>
+                <span><Clock3 size={14} /> {Math.floor(SIMULATION_TIME_LIMIT_SECONDS / 60)} 分钟</span>
               </div>
             </div>
-            <button type="button" className={styles.launchButton} onClick={onLaunch}>
+            <div className={styles.launchRewardStrip} aria-label="项目奖励与排行">
+              <span>
+                <Zap size={16} />
+                <strong>项目通关 XP</strong>
+                <small>完成后 +{projectMinimumXp} XP 起，奖牌越高加成越多</small>
+              </span>
+              <span>
+                <Medal size={16} />
+                <strong>实时排行榜</strong>
+                <small>按全站 XP 排名，完成项目后自动刷新战力</small>
+              </span>
+            </div>
+            <div className={styles.launchActionRow}>
+              <button type="button" className={styles.launchButton} onClick={onLaunch}>
               启动全屏实训 <ChevronRight size={20} />
-            </button>
+              </button>
+              <button type="button" className={styles.launchLeaderboardButton} onClick={onLeaderboard}>
+                <Medal size={18} /> 查看排行榜
+              </button>
+            </div>
             <p className={styles.launchNotice}>
               <ShieldCheck size={17} />
               进入后地图、剧情调查与终场核验均保持全屏呈现
             </p>
           </div>
 
-          <div className={styles.launchPreview} aria-label="项目地图预览">
+          <div className={styles.launchPreview} aria-label="项目地图预览" style={previewStyle}>
             <Image
               src="/simulation/map-background.webp"
               alt="质量守护远征项目地图预览"
@@ -1143,7 +2091,7 @@ function LaunchPanel({
               <span><Building2 size={15} /> 制药质量远征地图</span>
               <strong>{String(trophySummary.total).padStart(2, '0')} / {PROJECT_MISSIONS.length - 1}</strong>
             </div>
-            <div className={styles.previewNode}>
+            <div className={`${styles.previewNode} ${project.labelSide === 'left' ? styles.previewNodeLeft : ''}`}>
               <span><Target size={18} /></span>
               <div>
                 <small>当前解锁项目</small>
@@ -1177,6 +2125,14 @@ function LaunchPanel({
             <Shield size={20} />
             <div><small>课时进度</small><strong>{creditSummary.gameEarned} / {creditSummary.gameRequired} 游戏课时</strong></div>
           </article>
+          <article>
+            <Zap size={20} />
+            <div><small>项目奖励</small><strong>+{projectMinimumXp} XP 起</strong></div>
+          </article>
+          <button type="button" className={styles.launchMetricButton} onClick={onLeaderboard}>
+            <Medal size={20} />
+            <div><small>排行榜</small><strong>查看 XP 排名</strong></div>
+          </button>
         </section>
       </main>
     </div>
@@ -1184,36 +2140,30 @@ function LaunchPanel({
 }
 
 function GameRail({
-  screen,
-  onMap,
-  onLevels,
-  onTask,
-  onSupply,
-  onShop,
+  onLeaderboard,
+  onBackpack,
+  onSkills,
+  onTools,
 }: {
-  screen: Screen
-  onMap: () => void
-  onLevels: () => void
-  onTask: () => void
-  onSupply: () => void
-  onShop: () => void
+  onLeaderboard: () => void
+  onBackpack: () => void
+  onSkills: () => void
+  onTools: () => void
 }) {
   const entries = [
-    { label: '主页', icon: Building2, action: onMap, current: screen === 'map' },
-    { label: '关卡', icon: Swords, action: onLevels, current: screen === 'levels' },
-    { label: '任务', icon: ClipboardCheck, action: onTask, current: screen === 'briefing' },
-    { label: '补给', icon: HeartPulse, action: onSupply, current: false },
-    { label: '商店', icon: ShoppingBag, action: onShop, current: false },
+    { label: '排行', icon: Trophy, action: onLeaderboard },
+    { label: '背包', icon: Backpack, action: onBackpack },
+    { label: '技能树', icon: BrainCircuit, action: onSkills },
+    { label: '工具', icon: Wrench, action: onTools },
   ]
 
   return (
     <nav className={styles.gameRail} aria-label="实训功能导航">
-      {entries.map(({ label, icon: Icon, action, current }) => (
+      {entries.map(({ label, icon: Icon, action }) => (
         <button
           type="button"
           key={label}
-          className={`${styles.railButton} ${current ? styles.railButtonActive : ''}`}
-          aria-current={current ? 'page' : undefined}
+          className={styles.railButton}
           onClick={action}
         >
           <Icon size={21} />
@@ -1222,9 +2172,168 @@ function GameRail({
       ))}
       <div className={styles.railMission}>
         <strong>07</strong>
-        <span>当前任务</span>
+        <span>远征工具</span>
       </div>
     </nav>
+  )
+}
+
+function SimulationTopNav({
+  title,
+  screen,
+  wallet,
+  trophySummary,
+  creditSummary,
+  onExit,
+  onMap,
+  onLevels,
+  onTask,
+  onSupply,
+  onTrophies,
+  onMessages,
+  onSettings,
+}: {
+  title: string
+  screen: Screen
+  wallet: Wallet
+  trophySummary: TrophySummary
+  creditSummary: ReturnType<typeof summarizeCredit>
+  onExit: () => void
+  onMap: () => void
+  onLevels: () => void
+  onTask: () => void
+  onSupply: () => void
+  onTrophies: () => void
+  onMessages: () => void
+  onSettings: () => void
+}) {
+  const tabs = [
+    { label: '地图', icon: Building2, action: onMap, current: screen === 'map' },
+    { label: '关卡', icon: Swords, action: onLevels, current: screen === 'levels' },
+    { label: '任务', icon: ClipboardCheck, action: onTask, current: screen === 'briefing' },
+  ]
+
+  return (
+    <header className={styles.topNav}>
+      <div className={styles.topBrand}>
+        <button type="button" className={styles.topExit} onClick={onExit} aria-label="退出实训">
+          <ArrowLeft size={19} />
+        </button>
+        <div className={styles.topBrandMark}><Shield size={20} /></div>
+        <div className={styles.topBrandText}>
+          <span>GMP 实训仿真</span>
+          <strong>{title}</strong>
+        </div>
+      </div>
+
+      <nav className={styles.topTabs} aria-label="实训主导航">
+        {tabs.map(({ label, icon: Icon, action, current }) => (
+          <button
+            type="button"
+            key={label}
+            className={`${styles.topTab} ${current ? styles.topTabActive : ''}`}
+            aria-current={current ? 'page' : undefined}
+            onClick={action}
+          >
+            <Icon size={16} />
+            <span>{label}</span>
+          </button>
+        ))}
+      </nav>
+
+      <div className={styles.topResources} aria-label="资源状态">
+        <button type="button" className={styles.topSupply} onClick={onSupply}>
+          <HeartPulse size={15} />
+          <span>补给</span>
+        </button>
+        <span className={styles.topStat}><Coins size={15} />{wallet.coins.toLocaleString()}</span>
+        <span className={styles.topStat}><Gem size={15} />{wallet.gems.toLocaleString()}</span>
+        <button type="button" className={styles.topStatButton} onClick={onTrophies} aria-label="查看奖章与课时分">
+          <Trophy size={15} />{trophySummary.total.toLocaleString()}
+        </button>
+        <span className={styles.topStat}><GraduationCap size={15} />{creditSummary.gameEarned}/{creditSummary.gameRequired}</span>
+      </div>
+
+      <div className={styles.topActions}>
+        <button type="button" className={styles.topIconButton} onClick={onMessages}>
+          <Bell size={17} />
+          <span>消息</span>
+        </button>
+        <button type="button" className={styles.topIconButton} onClick={onSettings}>
+          <Settings size={17} />
+          <span>设置</span>
+        </button>
+      </div>
+    </header>
+  )
+}
+
+function HubNavTabs({
+  screen,
+  onMap,
+  onLevels,
+  onTask,
+}: {
+  screen: Screen
+  onMap: () => void
+  onLevels: () => void
+  onTask: () => void
+}) {
+  const tabs = [
+    { label: '地图', icon: Building2, action: onMap, current: screen === 'map' },
+    { label: '关卡', icon: Swords, action: onLevels, current: screen === 'levels' },
+    { label: '任务', icon: ClipboardCheck, action: onTask, current: screen === 'briefing' },
+  ]
+
+  return (
+    <nav className={styles.hubTabs} aria-label="实训主导航">
+      {tabs.map(({ label, icon: Icon, action, current }) => (
+        <button
+          type="button"
+          key={label}
+          className={`${styles.hubTab} ${current ? styles.hubTabActive : ''}`}
+          aria-current={current ? 'page' : undefined}
+          onClick={action}
+        >
+          <Icon size={16} />
+          <span>{label}</span>
+        </button>
+      ))}
+    </nav>
+  )
+}
+
+function TopActionDock({ onMessages, onSettings }: { onMessages: () => void; onSettings: () => void }) {
+  return (
+    <div className={styles.topActionDock} aria-label="消息和设置">
+      <button type="button" onClick={onMessages}>
+        <Bell size={17} />
+        <span>消息</span>
+      </button>
+      <button type="button" onClick={onSettings}>
+        <Settings size={17} />
+        <span>设置</span>
+      </button>
+    </div>
+  )
+}
+
+function SocialDock({ onMentor, onFriends, onReport }: { onMentor: () => void; onFriends: () => void; onReport: () => void }) {
+  return (
+    <aside className={styles.socialDock} aria-label="学习辅助入口">
+      <button type="button" className={styles.socialDockButton} onClick={onMentor}>
+        <Bot size={18} />
+        <span>AI导师</span>
+      </button>
+      <button type="button" className={styles.socialDockButton} onClick={onFriends}>
+        <UsersRound size={18} />
+        <span>好友</span>
+      </button>
+      <button type="button" className={`${styles.socialDockButton} ${styles.socialReportButton}`} onClick={onReport}>
+        <BookOpen size={18} />
+        <span>学习报告</span>
+      </button>
+    </aside>
   )
 }
 
@@ -1317,6 +2426,70 @@ function ResourceDock({ wallet, trophySummary, creditSummary, onSupply, onShop, 
   )
 }
 
+function RouteLayer({
+  projects,
+  travel,
+  avatarUrl,
+  displayName,
+}: {
+  projects: ProjectNode[]
+  travel: RouteTravel | null
+  avatarUrl: string | null
+  displayName: string
+}) {
+  const segments = projects
+    .slice(1)
+    .map((project, index) => {
+      const previous = projects[index]
+      const advancing = travel?.fromId === previous.id && travel.toId === project.id
+      const visible = advancing || (previous.status === 'cleared' && project.status !== 'locked')
+      return {
+        from: previous,
+        to: project,
+        path: routePathBetween(previous, project, index),
+        active: previous.status === 'cleared' && project.status === 'active',
+        completed: previous.status === 'cleared' && project.status === 'cleared',
+        advancing,
+        visible,
+      }
+    })
+    .filter(segment => segment.visible)
+  const travelSegment = travel ? segments.find(segment => segment.from.id === travel.fromId && segment.to.id === travel.toId) : null
+  const travelIndex = travelSegment ? projects.findIndex(project => project.id === travelSegment.from.id) : 0
+  const avatarStyle = travelSegment ? routeAvatarStyleBetween(travelSegment.from, travelSegment.to, travelIndex) : undefined
+  const avatarInitial = displayName.trim().slice(0, 1) || 'G'
+
+  if (!segments.length) return null
+
+  return (
+    <>
+      <div className={styles.routeLayer} aria-hidden="true">
+        <svg className={styles.routeSvg} viewBox="0 0 100 100" preserveAspectRatio="none">
+          {segments.map(segment => (
+            <g
+              key={`${segment.from.id}-${segment.to.id}`}
+              className={`${styles.routeSegment} ${segment.active ? styles.routeActive : ''} ${segment.completed ? styles.routeCompleted : ''} ${segment.advancing ? styles.routeAdvancing : ''}`}
+            >
+              <path className={styles.routeShadow} d={segment.path} />
+              <path className={styles.routeTrack} d={segment.path} />
+              <path className={styles.routeDash} d={segment.path} />
+            </g>
+          ))}
+        </svg>
+      </div>
+      {travelSegment && avatarStyle && (
+        <div key={travel?.key} className={styles.routeAvatarLayer} aria-hidden="true">
+          <div className={styles.routeAvatarBadge} style={avatarStyle}>
+            {avatarUrl
+              ? <Image src={avatarUrl} alt="" fill unoptimized className={styles.routeAvatarImage} />
+              : <span>{avatarInitial}</span>}
+          </div>
+        </div>
+      )}
+    </>
+  )
+}
+
 function ProjectMap({ projects, onEnterProject, interactive }: { projects: ProjectNode[]; onEnterProject: (projectId: number) => void; interactive: boolean }) {
   return (
     <section className={styles.projectLayer} aria-label="课程项目地图">
@@ -1374,6 +2547,7 @@ function DashboardPanel({
   onEnterProject,
   onShop,
   onTrophies,
+  onLeaderboard,
 }: {
   displayName: string
   realName: string
@@ -1389,6 +2563,7 @@ function DashboardPanel({
   onEnterProject: () => void
   onShop: () => void
   onTrophies: () => void
+  onLeaderboard: () => void
 }) {
   return (
     <>
@@ -1406,8 +2581,8 @@ function DashboardPanel({
           </div>
         </div>
         <div className={styles.vital}>
-          <div><HeartPulse size={16} /><span>HP 健康值</span><strong>{hp}/100</strong></div>
-          <progress value={hp} max={100} />
+          <div><HeartPulse size={16} /><span>HP 健康值</span><strong>{hp}/{SIMULATION_MAX_HP}</strong></div>
+          <progress value={hp} max={SIMULATION_MAX_HP} />
         </div>
         <div className={styles.vital}>
           <div><GraduationCap size={16} /><span>Lv.{player.rankLevel} {player.rankTitle}</span><strong>{player.xp} XP</strong></div>
@@ -1440,6 +2615,10 @@ function DashboardPanel({
         <button type="button" className={styles.inventoryButton} onClick={onShop}>
           <ShoppingBag size={16} /> 战备仓库
           <span>{wallet.inventory.skip + wallet.inventory.boost + wallet.inventory.heal} 件</span>
+        </button>
+        <button type="button" className={styles.leaderboardButton} onClick={onLeaderboard}>
+          <Medal size={16} /> 查看 XP 排行榜
+          <span>Top 10</span>
         </button>
       </section>
     </>
@@ -1584,6 +2763,8 @@ function StoryPanel({
   answers,
   score,
   finished,
+  remainingTime,
+  timedOut,
   onBack,
   onExit,
   onSelectAnswer,
@@ -1601,6 +2782,8 @@ function StoryPanel({
   answers: string[]
   score: number
   finished: boolean
+  remainingTime: number
+  timedOut: boolean
   onBack: () => void
   onExit: () => void
   onSelectAnswer: (id: string) => void
@@ -1618,9 +2801,12 @@ function StoryPanel({
       <header className={styles.stageHeader}>
         <button type="button" className={styles.stageBack} onClick={onBack} aria-label="返回角色选择"><ArrowLeft size={19} /></button>
         <div className={styles.stageTitle}><small>项目{project.id} / {trackLabel(educationTrack)} · {role.title}</small><strong>{project.title}</strong></div>
-        <div className={styles.longProgress}>
-          <span>第 {question.sceneNumber ?? 5} 关 {currentScene?.title} · {question.sceneMood}</span>
-          <progress value={finished ? questions.length : questionIndex + 1} max={questions.length} />
+        <div className={styles.stageStatusGroup}>
+          <CountdownBadge remainingTime={remainingTime} timedOut={timedOut} />
+          <div className={styles.longProgress}>
+            <span>第 {question.sceneNumber ?? 5} 关 {currentScene?.title} · {question.sceneMood}</span>
+            <progress value={finished ? questions.length : questionIndex + 1} max={questions.length} />
+          </div>
         </div>
         <button type="button" className={styles.stageExit} onClick={onExit}><X size={15} />退出实训</button>
       </header>
@@ -1682,13 +2868,24 @@ function StoryPanel({
                 <span><strong>行动 {choice.id}</strong><small>{choice.label}</small></span>
               </button>
             ))}
-            <button type="button" className={styles.stageContinue} disabled={!answers.length} onClick={onContinue}>
+            <button type="button" className={styles.stageContinue} disabled={!answers.length || timedOut} onClick={onContinue}>
               {questionIndex === questions.length - 1 ? '提交调查报告' : '执行行动并推进剧情'} <ChevronRight size={18} />
             </button>
           </fieldset>
         </div>
       )}
     </section>
+  )
+}
+
+function CountdownBadge({ remainingTime, timedOut }: { remainingTime: number; timedOut: boolean }) {
+  const warning = remainingTime <= 5 * 60
+  return (
+    <div className={`${styles.countdownBadge} ${warning || timedOut ? styles.countdownWarning : ''}`} aria-live="polite">
+      <Clock3 size={16} />
+      <span>{timedOut ? '已超时' : '剩余时间'}</span>
+      <strong>{formatCountdown(remainingTime)}</strong>
+    </div>
   )
 }
 
@@ -1701,12 +2898,16 @@ function BossPanel({
   hp,
   bossHp,
   bossMaxHp,
+  bossHitDamage,
+  playerMissDamage,
   correct,
   question,
   questionIndex,
   answers,
   wallet,
   damageBoost,
+  remainingTime,
+  timedOut,
   onBack,
   onExit,
   onSelectAnswer,
@@ -1722,12 +2923,16 @@ function BossPanel({
   hp: number
   bossHp: number
   bossMaxHp: number
+  bossHitDamage: number
+  playerMissDamage: number
   correct: number
   question: TrainingQuestion
   questionIndex: number
   answers: string[]
   wallet: Wallet
   damageBoost: boolean
+  remainingTime: number
+  timedOut: boolean
   onBack: () => void
   onExit: () => void
   onSelectAnswer: (id: string) => void
@@ -1735,7 +2940,7 @@ function BossPanel({
   onUseItem: (item: ItemId) => void
   onShop: () => void
 }) {
-  const hpPercent = Math.round((bossHp / bossMaxHp) * 100)
+  const hpPercent = Math.round((bossHp / Math.max(1, bossMaxHp)) * 100)
   const accuracy = questionIndex === 0 ? 0 : Math.round((correct / questionIndex) * 100)
   const testAnswer = project.id === 1 ? question.correct.join('、') : ''
   return (
@@ -1745,35 +2950,35 @@ function BossPanel({
       <header className={styles.stageHeader}>
         <button type="button" className={styles.stageBack} onClick={onBack} aria-label="返回剧情回顾"><ArrowLeft size={19} /></button>
         <div className={styles.stageTitle}><small>项目{project.id} · {trackLabel(educationTrack)}终场核验 / {role.title}</small><strong>{project.title}</strong></div>
-        <div className={styles.battleMetrics}><span><Target size={16} /> 命中率 {accuracy}%</span><button type="button" onClick={onShop}><ShoppingBag size={15} /> 商店</button></div>
+        <div className={styles.battleMetrics}><CountdownBadge remainingTime={remainingTime} timedOut={timedOut} /><span><Target size={16} /> 命中率 {accuracy}%</span><button type="button" onClick={onShop}><ShoppingBag size={15} /> 商店</button></div>
         <button type="button" className={styles.stageExit} onClick={onExit}><X size={15} />退出实训</button>
       </header>
       <div className={styles.bossIdentity}>
         <p>首领 / {project.bossTitle}</p>
         <h2>{project.bossName}</h2>
-        <div className={styles.bossHealth}>
-          <label>Boss HP <strong>{bossHp} / {bossMaxHp}</strong></label>
-          <progress value={bossHp} max={bossMaxHp} />
-          <small>{hpPercent}% 剩余</small>
-        </div>
       </div>
       <aside className={styles.battleBrief}>
         <h3>{trackLabel(educationTrack)}{educationTrack === 'college' ? '合规审核战' : '调查答辩战'}</h3>
         <p className={styles.turnText}>核验回合 {questionIndex + 1} / {questions.length}</p>
+        <div className={`${styles.bossHealth} ${styles.bossBriefHealth}`}>
+          <label><span>Boss HP · {project.bossName}</span><strong>{bossHp} / {bossMaxHp}</strong></label>
+          <progress value={bossHp} max={bossMaxHp} />
+          <small>{hpPercent}% 剩余</small>
+        </div>
         <ul>
           <li className={questionIndex >= 3 ? styles.objectiveDone : ''}><span className={styles.objectiveMark}>{questionIndex >= 3 && <Check size={13} />}</span>证据与流程核验</li>
           <li className={questionIndex >= 7 ? styles.objectiveDone : ''}><span className={styles.objectiveMark}>{questionIndex >= 7 && <Check size={13} />}</span>影响与 CAPA 核验</li>
           <li className={bossHp === 0 ? styles.objectiveDone : ''}><span className={styles.objectiveMark}>{bossHp === 0 && <Check size={13} />}</span>案例：CAPA 闭环</li>
         </ul>
         <div className={styles.playerHealth}>
-          <div><role.icon size={17} /><strong>{role.title}</strong><span>{hp}/100</span></div>
-          <progress value={hp} max={100} />
+          <div><role.icon size={17} /><strong>{role.title}</strong><span>{hp}/{SIMULATION_MAX_HP}</span></div>
+          <progress value={hp} max={SIMULATION_MAX_HP} />
         </div>
         <div className={styles.itemBelt}>
           <p>战术道具 {damageBoost && <em>增幅已装载</em>}</p>
           <button type="button" disabled={!wallet.inventory.skip} onClick={() => onUseItem('skip')}><Ticket size={15} /> 跳题卡 <b>x{wallet.inventory.skip}</b></button>
           <button type="button" disabled={!wallet.inventory.boost || damageBoost} onClick={() => onUseItem('boost')}><Zap size={15} /> 增幅器 <b>x{wallet.inventory.boost}</b></button>
-          <button type="button" disabled={!wallet.inventory.heal || hp >= 100} onClick={() => onUseItem('heal')}><HeartPulse size={15} /> 补给包 <b>x{wallet.inventory.heal}</b></button>
+          <button type="button" disabled={!wallet.inventory.heal || hp >= SIMULATION_MAX_HP} onClick={() => onUseItem('heal')}><HeartPulse size={15} /> 补给包 <b>x{wallet.inventory.heal}</b></button>
         </div>
       </aside>
       <section className={styles.commandDeck}>
@@ -1796,7 +3001,7 @@ function BossPanel({
             <h3>{question.choicePrompt ?? question.stem}</h3>
             {question.choicePrompt ? <small>{question.stem}</small> : null}
             {testAnswer && <small className={styles.bossAnswerKey}>测试答案：{testAnswer}</small>}
-            <span className={styles.commandHint}><WandSparkles size={15} />命中造成 {BOSS_HIT_DAMAGE}{damageBoost ? ' + 35' : ''} HP 伤害</span>
+            <span className={styles.commandHint}><WandSparkles size={15} />命中造成 {bossHitDamage}{damageBoost ? ` + ${BOSS_BOOST_DAMAGE}` : ''} HP 伤害，答错扣 {playerMissDamage} HP</span>
           </div>
         </div>
         <div className={styles.commandOptions}>
@@ -1805,16 +3010,19 @@ function BossPanel({
               <strong>{option.id}</strong><span>{option.label}</span>
             </button>
           ))}
-          <button type="button" className={styles.strikeButton} disabled={!answers.length} onClick={onSubmit}><Swords size={17} />执行核验</button>
+          <button type="button" className={styles.strikeButton} disabled={!answers.length || timedOut} onClick={onSubmit}><Swords size={17} />执行核验</button>
         </div>
       </section>
     </section>
   )
 }
 
-function ResultPanel({ project, role, educationTrack, carrier, outcome, reward, storyScore, creditAward, onMap, onReplay, onExit }: { project: ProjectDefinition; role: Role; educationTrack: EducationTrack; carrier: CarrierCase; outcome: BattleOutcome; reward: WalletReward | null; storyScore: number; creditAward: number; onMap: () => void; onReplay: () => void; onExit: () => void }) {
+function ResultPanel({ project, role, educationTrack, carrier, outcome, reward, storyScore, creditAward, xpAward, remainingTime, onMap, onReplay, onExit }: { project: ProjectDefinition; role: Role; educationTrack: EducationTrack; carrier: CarrierCase; outcome: BattleOutcome; reward: WalletReward | null; storyScore: number; creditAward: number; xpAward: ProjectXpAward | null; remainingTime: number; onMap: () => void; onReplay: () => void; onExit: () => void }) {
   const medal = MEDAL_CONTENT[outcome.medal]
-  const accuracy = Math.round((outcome.correct / outcome.total) * 100)
+  const accuracy = outcome.total > 0 ? Math.round((outcome.correct / outcome.total) * 100) : 0
+  const xpText = xpAward
+    ? xpAward.xpGained > 0 ? `+${xpAward.xpGained} XP` : xpAward.message
+    : outcome.victory ? 'XP 结算中' : '+0 XP'
   return (
     <section className={`${styles.cinematicStage} ${styles.resultStage}`} aria-label="项目结算">
       <Image src={project.bossImage || role.bossImage} alt="" fill sizes="100vw" className={styles.resultImage} />
@@ -1824,9 +3032,9 @@ function ResultPanel({ project, role, educationTrack, carrier, outcome, reward, 
       <section className={styles.resultPanel}>
         <div className={styles.resultHero}>
           <span className={styles.resultSeal} style={{ color: medal.color }}>{outcome.victory ? <Trophy size={48} /> : <ShieldAlert size={48} />}</span>
-          <p className={styles.eyebrow}>{outcome.victory ? `${trackLabel(educationTrack)}线路通关` : '挑战未完成'}</p>
-          <h2>{outcome.victory ? `${project.title}已形成有效闭环` : `${project.bossName}仍未被彻底击退`}</h2>
-          <p>{medal.detail}</p>
+          <p className={styles.eyebrow}>{outcome.victory ? `${trackLabel(educationTrack)}线路通关` : outcome.timedOut ? '训练超时' : '挑战未完成'}</p>
+          <h2>{outcome.victory ? `${project.title}已形成有效闭环` : outcome.timedOut ? '未在规定时间内完成实训' : `${project.bossName}仍未被彻底击退`}</h2>
+          <p>{outcome.timedOut ? '本次实训已超过前置页面标注的 90 分钟时限，不能判定通过，请重新挑战。' : medal.detail}</p>
           <div className={styles.medalAward} style={{ color: medal.color }}><Medal size={22} /><strong>{medal.label}</strong></div>
         </div>
         <div className={styles.resultGrid}>
@@ -1836,7 +3044,9 @@ function ResultPanel({ project, role, educationTrack, carrier, outcome, reward, 
               <div><strong>{storyScore}</strong><span>剧情分数</span></div>
               <div><strong>{accuracy}%</strong><span>攻击命中</span></div>
               <div><strong>{outcome.projectScore}</strong><span>项目总分</span></div>
-              <div><strong>{outcome.hp}</strong><span>剩余 HP</span></div>
+              <div><strong>{outcome.hp}/{SIMULATION_MAX_HP}</strong><span>玩家血量</span></div>
+              <div><strong>{outcome.bossHp}/{BOSS_MAX_HP}</strong><span>Boss血量</span></div>
+              <div><strong>{formatCountdown(remainingTime)}</strong><span>{outcome.timedOut ? '超时' : '剩余时间'}</span></div>
             </div>
             <p className={styles.demoNote}>{role.title} · {carrier.dosageForm}主载体案例。可返回更换本专业另一主案例复盘训练路径。</p>
           </section>
@@ -1849,7 +3059,9 @@ function ResultPanel({ project, role, educationTrack, carrier, outcome, reward, 
               <span><Gem size={16} /> +{reward?.gems ?? 0} 钻石</span>
               <span><Trophy size={16} /> +{reward?.trophies ?? 0} 奖杯</span>
               <span><GraduationCap size={16} /> +{creditAward} 课时分</span>
+              <span><Sparkles size={16} /> {xpText}</span>
             </div>
+            {xpAward?.leveledUp && <p className={styles.levelUpNotice}>等级晋升至 Lv.{xpAward.rankLevel} {xpAward.rankTitle}</p>}
           </section>
         </div>
         <div className={styles.resultActions}>
@@ -1896,6 +3108,91 @@ function TrophyModal({ projects, progress, trophySummary, creditSummary, onClose
                 <em className={project.medal !== 'none' ? styles[`medal${project.medal[0].toUpperCase()}${project.medal.slice(1)}`] : undefined}>{medalLabel(project.medal)}</em>
                 <small>{record ? `${record.bestScore} 分 · ${record.creditHours} 课时` : project.status === 'active' ? '可挑战' : '未解锁'}</small>
               </div>
+            )
+          })}
+        </div>
+      </section>
+    </div>
+  )
+}
+
+function LeaderboardModal({
+  entries,
+  currentUser,
+  loading,
+  error,
+  onRefresh,
+  onClose,
+}: {
+  entries: LeaderboardEntry[]
+  currentUser: LeaderboardEntry | null
+  loading: boolean
+  error: string
+  onRefresh: () => void
+  onClose: () => void
+}) {
+  const rows: LeaderboardEntry[] = currentUser && !entries.some(entry => entry.userId === currentUser.userId)
+    ? [...entries, currentUser]
+    : entries
+
+  return (
+    <div className={styles.modalScrim} role="presentation" onMouseDown={onClose}>
+      <section className={styles.leaderboardModal} role="dialog" aria-modal="true" aria-labelledby="leaderboard-title" onMouseDown={event => event.stopPropagation()}>
+        <button type="button" className={styles.closeButton} onClick={onClose} aria-label="关闭排行榜"><X size={19} /></button>
+        <header className={styles.leaderboardHeader}>
+          <div className={styles.modalIcon}><Medal size={30} /></div>
+          <div>
+            <p className={styles.eyebrow}>XP LEADERBOARD</p>
+            <h2 id="leaderboard-title">实训 XP 排行榜</h2>
+            <span>按 XP、积分和最长连续打卡排序，项目通关 XP 会即时计入排名。</span>
+          </div>
+          <button type="button" onClick={onRefresh} disabled={loading}>
+            <Sparkles size={15} />刷新
+          </button>
+        </header>
+
+        {currentUser && (
+          <section className={styles.myRankCard} aria-label="我的当前排行">
+            <div>
+              <span>我的排名</span>
+              <strong>#{currentUser.leaderboardRank}</strong>
+            </div>
+            <div>
+              <span>当前 XP</span>
+              <strong>{currentUser.xp.toLocaleString()}</strong>
+            </div>
+            <div>
+              <span>等级</span>
+              <strong>Lv.{currentUser.rankLevel}</strong>
+            </div>
+          </section>
+        )}
+
+        <div className={styles.leaderboardList}>
+          {loading && <p className={styles.leaderboardState}>正在校准排行榜数据...</p>}
+          {!loading && error && <p className={styles.leaderboardState}>{error}</p>}
+          {!loading && !error && rows.length === 0 && <p className={styles.leaderboardState}>暂无排行数据，完成项目后会出现在这里。</p>}
+          {!loading && !error && rows.map(entry => {
+            const isCurrent = currentUser?.userId === entry.userId
+            return (
+              <article key={`${entry.userId}-${entry.leaderboardRank}`} className={`${styles.leaderboardRow} ${isCurrent ? styles.leaderboardMe : ''}`}>
+                <div className={styles.rankNumber}>
+                  {entry.leaderboardRank <= 3 ? <Trophy size={18} /> : <span>{entry.leaderboardRank}</span>}
+                </div>
+                <div className={styles.leaderAvatar}>
+                  {entry.avatarUrl
+                    ? <Image src={entry.avatarUrl} alt={`${entry.displayName}的头像`} width={42} height={42} unoptimized className={styles.avatarImage} />
+                    : <UserRound size={21} />}
+                </div>
+                <div className={styles.leaderCopy}>
+                  <strong>{entry.displayName}{isCurrent ? ' · 我' : ''}</strong>
+                  <span>{entry.school || '未填写学校'} · {entry.major || 'GMP 学习者'}</span>
+                </div>
+                <div className={styles.leaderStats}>
+                  <strong>{entry.xp.toLocaleString()} XP</strong>
+                  <span>Lv.{entry.rankLevel} {entry.rankTitle}</span>
+                </div>
+              </article>
             )
           })}
         </div>

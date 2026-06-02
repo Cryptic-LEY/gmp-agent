@@ -1,6 +1,7 @@
 'use client'
 
-import { useState, type CSSProperties, type Dispatch, type SetStateAction } from 'react'
+import Image from 'next/image'
+import { useRef, useState, type ChangeEvent, type CSSProperties, type Dispatch, type SetStateAction } from 'react'
 import {
   BookOpen,
   Building2,
@@ -32,6 +33,7 @@ export interface RoleProfileData {
   studentId?: string | null
   idCard?: string | null
   phone?: string | null
+  avatarUrl?: string | null
 }
 
 export interface RoleProfileForm {
@@ -56,6 +58,7 @@ interface RoleProfileCenterProps {
   onFormChange: Dispatch<SetStateAction<RoleProfileForm>>
   saving: boolean
   onSave: () => void | Promise<void>
+  onAvatarUpload: (avatarUrl: string) => Promise<void>
   onClose: () => void
 }
 
@@ -89,6 +92,36 @@ const tabs: { key: ProfileTab; label: string }[] = [
   { key: 'devices', label: '在线设备' },
 ]
 
+function resizeAvatar(file: File) {
+  return new Promise<string>((resolve, reject) => {
+    const source = URL.createObjectURL(file)
+    const picture = new window.Image()
+    picture.onload = () => {
+      const size = 256
+      const canvas = document.createElement('canvas')
+      const context = canvas.getContext('2d')
+      if (!context) {
+        URL.revokeObjectURL(source)
+        reject(new Error('Canvas unavailable'))
+        return
+      }
+      canvas.width = size
+      canvas.height = size
+      const sourceSize = Math.min(picture.width, picture.height)
+      const sourceX = (picture.width - sourceSize) / 2
+      const sourceY = (picture.height - sourceSize) / 2
+      context.drawImage(picture, sourceX, sourceY, sourceSize, sourceSize, 0, 0, size, size)
+      URL.revokeObjectURL(source)
+      resolve(canvas.toDataURL('image/webp', 0.84))
+    }
+    picture.onerror = () => {
+      URL.revokeObjectURL(source)
+      reject(new Error('Invalid image'))
+    }
+    picture.src = source
+  })
+}
+
 export default function RoleProfileCenter({
   profile,
   displayName,
@@ -97,13 +130,17 @@ export default function RoleProfileCenter({
   onFormChange,
   saving,
   onSave,
+  onAvatarUpload,
   onClose,
 }: RoleProfileCenterProps) {
+  const avatarInputRef = useRef<HTMLInputElement>(null)
   const [activeTab, setActiveTab] = useState<ProfileTab>('basic')
   const [pwForm, setPwForm] = useState({ old: '', newPw: '', confirm: '' })
   const [pwSaving, setPwSaving] = useState(false)
   const [pwMsg, setPwMsg] = useState<{ ok: boolean; text: string } | null>(null)
   const [wechatBound, setWechatBound] = useState(false)
+  const [avatarSaving, setAvatarSaving] = useState(false)
+  const [avatarMsg, setAvatarMsg] = useState<{ ok: boolean; text: string } | null>(null)
 
   const fieldLabels = role === 'admin'
     ? { school: '学校/机构', major: '部门', className: '岗位', studentId: '工号/编号' }
@@ -178,20 +215,61 @@ export default function RoleProfileCenter({
     }
   }
 
+  async function handleAvatarChange(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0]
+    event.target.value = ''
+    if (!file) return
+    if (!/^image\/(png|jpeg|webp)$/i.test(file.type)) {
+      setAvatarMsg({ ok: false, text: '请选择 PNG、JPG 或 WEBP 图片' })
+      return
+    }
+    if (file.size > 5 * 1024 * 1024) {
+      setAvatarMsg({ ok: false, text: '图片文件不能超过 5MB' })
+      return
+    }
+    setAvatarSaving(true)
+    setAvatarMsg(null)
+    try {
+      const avatarUrl = await resizeAvatar(file)
+      await onAvatarUpload(avatarUrl)
+      setAvatarMsg({ ok: true, text: '头像已更新' })
+    } catch (error) {
+      setAvatarMsg({ ok: false, text: error instanceof Error ? error.message : '头像保存失败' })
+    } finally {
+      setAvatarSaving(false)
+    }
+  }
+
   return (
     <section style={{ display: 'grid', gridTemplateColumns: '280px minmax(0, 1fr)', gap: 20, maxWidth: 1160, alignItems: 'start' }}>
       <div style={{ ...PANEL, padding: '24px 20px', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
         <div style={{ position: 'relative', marginBottom: 12 }}>
-          <div style={{ width: 80, height: 80, borderRadius: '50%', background: 'linear-gradient(135deg,#215566,#35818a)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-            <span style={{ color: '#fff', fontSize: 28, fontWeight: 700 }}>{initial}</span>
+          <div style={{ position: 'relative', overflow: 'hidden', width: 80, height: 80, borderRadius: '50%', background: 'linear-gradient(135deg,#215566,#35818a)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            {profile?.avatarUrl ? (
+              <Image src={profile.avatarUrl} alt={`${name}的头像`} fill unoptimized style={{ objectFit: 'cover' }} />
+            ) : (
+              <span style={{ color: '#fff', fontSize: 28, fontWeight: 700 }}>{initial}</span>
+            )}
           </div>
-          <div style={{ position: 'absolute', bottom: 0, right: 0, width: 24, height: 24, borderRadius: '50%', background: '#fff', border: '2px solid #e8eff2', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <button
+            type="button"
+            onClick={() => avatarInputRef.current?.click()}
+            disabled={avatarSaving}
+            aria-label="更换头像"
+            style={{ position: 'absolute', bottom: 0, right: 0, width: 28, height: 28, padding: 0, borderRadius: '50%', background: '#fff', border: '2px solid #e8eff2', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: avatarSaving ? 'wait' : 'pointer' }}
+          >
             <Camera size={12} color="#6b8a98" />
-          </div>
+          </button>
+          <input ref={avatarInputRef} type="file" accept="image/png,image/jpeg,image/webp" hidden onChange={handleAvatarChange} />
         </div>
 
         <p style={{ fontWeight: 700, fontSize: 15, color: '#183b4b', margin: '0 0 2px' }}>{name}</p>
         <p style={{ fontSize: 12, color: '#9ba8b0', margin: '0 0 20px' }}>{roleLabel}</p>
+        {avatarMsg && (
+          <p style={{ width: '100%', margin: '0 0 14px', padding: '8px 10px', borderRadius: 6, color: avatarMsg.ok ? '#14765d' : '#c63f44', background: avatarMsg.ok ? '#e8f7f1' : '#fdeaea', fontSize: 11, lineHeight: 1.5 }}>
+            {avatarMsg.text}
+          </p>
+        )}
 
         <div style={{ width: '100%', borderTop: '1px solid rgba(31,71,92,0.08)' }}>
           {infoRows.map(({ icon: Icon, label, value }) => (

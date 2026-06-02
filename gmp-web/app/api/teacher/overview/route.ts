@@ -62,7 +62,7 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
   }
 
-  const userRows = db.select({
+  const userRows = await db.select({
     userId: users.userId,
     displayName: users.displayName,
     email: users.email,
@@ -71,11 +71,12 @@ export async function GET(req: NextRequest) {
     school: users.school,
     major: users.major,
     className: users.className,
+    teacherUserId: users.teacherUserId,
     studentId: users.studentId,
     createdAt: users.createdAt,
-  }).from(users).all()
+  }).from(users)
 
-  const planRows = db.select({
+  const planRows = await db.select({
     id: learningPlans.id,
     userId: learningPlans.userId,
     eduLevel: learningPlans.eduLevel,
@@ -84,15 +85,15 @@ export async function GET(req: NextRequest) {
     wrongCount: learningPlans.wrongCount,
     planData: learningPlans.planData,
     createdAt: learningPlans.createdAt,
-  }).from(learningPlans).all()
+  }).from(learningPlans)
 
-  const historyRows = db.select({
+  const historyRows = await db.select({
     userId: questionHistory.userId,
     isCorrect: questionHistory.isCorrect,
     reviewed: questionHistory.reviewed,
-  }).from(questionHistory).all()
+  }).from(questionHistory)
 
-  const knowledgeRows = db.select({
+  const knowledgeRows = await db.select({
     kpId: knowledgePoints.kpId,
     serialCode: knowledgePoints.serialCode,
     eduLevel: knowledgePoints.eduLevel,
@@ -102,9 +103,9 @@ export async function GET(req: NextRequest) {
     pointType: knowledgePoints.pointType,
     difficulty: knowledgePoints.difficulty,
     gmpArticles: knowledgePoints.gmpArticles,
-  }).from(knowledgePoints).all()
+  }).from(knowledgePoints)
 
-  const questionRows = db.select({
+  const questionRows = await db.select({
     questionId: questions.questionId,
     kpId: questions.kpId,
     questionType: questions.questionType,
@@ -113,12 +114,23 @@ export async function GET(req: NextRequest) {
     projectName: questions.projectName,
     eduLevel: questions.eduLevel,
     status: questions.status,
-  }).from(questions).all()
+  }).from(questions)
 
-  const studentRows = userRows.filter(user => user.role === 'student')
+  const studentRows = userRows.filter(user => {
+    if (user.role !== 'student') return false
+    if (payload.role === 'admin') return true
+    return user.teacherUserId === payload.userId
+  })
+  const studentIdSet = new Set(studentRows.map(user => user.userId))
+  const scopedPlanRows = payload.role === 'admin'
+    ? planRows
+    : planRows.filter(plan => studentIdSet.has(plan.userId))
+  const scopedHistoryRows = payload.role === 'admin'
+    ? historyRows
+    : historyRows.filter(row => studentIdSet.has(row.userId))
   const latestPlanByUser = new Map<string, typeof planRows[number]>()
 
-  for (const plan of planRows) {
+  for (const plan of scopedPlanRows) {
     const current = latestPlanByUser.get(plan.userId)
     if (!current || new Date(plan.createdAt).getTime() > new Date(current.createdAt).getTime()) {
       latestPlanByUser.set(plan.userId, plan)
@@ -126,7 +138,7 @@ export async function GET(req: NextRequest) {
   }
 
   const historyByUser = new Map<string, { total: number; correct: number; wrong: number; pendingReview: number }>()
-  for (const row of historyRows) {
+  for (const row of scopedHistoryRows) {
     const item = historyByUser.get(row.userId) ?? { total: 0, correct: 0, wrong: 0, pendingReview: 0 }
     item.total += 1
     if (row.isCorrect) item.correct += 1
@@ -269,13 +281,13 @@ export async function GET(req: NextRequest) {
       classCount,
       activeRate: students.length ? round((completedCount / students.length) * 100) : 0,
       onboardingCompletedCount: completedCount,
-      planGeneratedCount: planRows.length,
+      planGeneratedCount: scopedPlanRows.length,
       averageDiagnosticScore: scoredStudents.length ? round(scoreSum / scoredStudents.length) : 0,
       passCount: scoredStudents.filter(student => (student.diagnosticScore ?? 0) >= 60).length,
       beginnerCount: scoredStudents.filter(student => (student.diagnosticScore ?? 0) < 60).length,
-      answerCount: historyRows.length,
-      wrongCount: historyRows.filter(row => !row.isCorrect).length,
-      pendingReviewCount: historyRows.filter(row => !row.isCorrect && !row.reviewed).length,
+      answerCount: scopedHistoryRows.length,
+      wrongCount: scopedHistoryRows.filter(row => !row.isCorrect).length,
+      pendingReviewCount: scopedHistoryRows.filter(row => !row.isCorrect && !row.reviewed).length,
       projectCount,
       taskCount,
       knowledgeCount,
@@ -291,9 +303,14 @@ export async function GET(req: NextRequest) {
     },
     managementModules: [
       { key: 'students', title: '学生与班级管理', status: 'first', desc: '查看学生资料、前测成绩、学习方案和错题复盘状态。' },
+      { key: 'standards', title: '课程标准管理', status: 'first', desc: '维护专业层次、课程教学目标、项目目标、课时占比和解锁顺序。' },
       { key: 'projects', title: '项目任务管理', status: 'first', desc: '查看项目、任务、知识点、技能点和题库覆盖情况。' },
       { key: 'knowledge', title: '知识/技能图谱管理', status: 'first', desc: '检索知识点、技能点、GMP 条款和任务归属。' },
-      { key: 'questions', title: '题库与前测规则管理', status: 'first', desc: '查看题型、难度、项目归属和前测题库覆盖。' },
+      { key: 'questions', title: '题库管理', status: 'first', desc: '查看题型、难度、项目归属和知识点关联。' },
+      { key: 'rules', title: '前测规则管理', status: 'first', desc: '维护 20 道题规则、按专业出题、课时占比出题和错点分析规则。' },
+      { key: 'planRules', title: '个性化方案规则管理', status: 'first', desc: '维护专业与剂型映射、项目推荐、薄弱点强化和案例关联规则。' },
+      { key: 'cases', title: '案例库管理', status: 'first', desc: '维护本科教材项目案例和 GMP 检查案例。' },
+      { key: 'aiAssist', title: 'AI助手', status: 'first', desc: '面向教师备课、课堂讲解、错点讲评和 GMP 法规答疑。' },
       { key: 'exports', title: '数据统计与导出', status: 'next', desc: '导出学生学习状态、题库统计和课程覆盖数据。' },
     ],
     students,

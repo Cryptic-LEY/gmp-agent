@@ -1,6 +1,16 @@
 import jwt from 'jsonwebtoken'
 
-const JWT_SECRET = process.env.JWT_SECRET!
+function getJwtSecret(): string {
+  if (process.env.JWT_SECRET) {
+    return process.env.JWT_SECRET
+  }
+
+  if (process.env.NODE_ENV !== 'production') {
+    return 'gmp-dev-secret-change-me'
+  }
+
+  throw new Error('JWT_SECRET is not configured')
+}
 
 export interface JwtPayload {
   userId: string
@@ -9,12 +19,12 @@ export interface JwtPayload {
 }
 
 export function signToken(payload: JwtPayload): string {
-  return jwt.sign(payload, JWT_SECRET, { expiresIn: '7d' })
+  return jwt.sign(payload, getJwtSecret(), { expiresIn: '7d' })
 }
 
 export function verifyToken(token: string): JwtPayload | null {
   try {
-    return jwt.verify(token, JWT_SECRET) as JwtPayload
+    return jwt.verify(token, getJwtSecret()) as JwtPayload
   } catch {
     return null
   }

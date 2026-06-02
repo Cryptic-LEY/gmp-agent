@@ -11,16 +11,20 @@ export async function GET(req: NextRequest) {
 
   const { userId } = payload
 
-  const sessions = db.$client.prepare(`
+  const sessions = await db.raw.all<{
+    id: number
+    product_name: string
+    dosage_category: string
+    score: number
+    max_score: number
+    completed_at: string
+  }>(`
     SELECT id, product_name, dosage_category, score, max_score, completed_at
     FROM simulation_sessions
     WHERE user_id = ?
     ORDER BY completed_at DESC
     LIMIT 10
-  `).all(userId) as {
-    id: number; product_name: string; dosage_category: string
-    score: number; max_score: number; completed_at: string
-  }[]
+  `, [userId])
 
   return NextResponse.json({ sessions })
 }

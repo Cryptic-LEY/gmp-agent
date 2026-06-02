@@ -19,7 +19,7 @@ export async function GET(req: NextRequest) {
   const limit  = Math.min(parseInt(searchParams.get('limit') ?? '200'), 500)
 
   // 拉取历史记录
-  const historyRows = db
+  const historyRows = await db
     .select()
     .from(questionHistory)
     .where(
@@ -29,7 +29,6 @@ export async function GET(req: NextRequest) {
     )
     .orderBy(desc(questionHistory.answeredAt))
     .limit(limit)
-    .all()
 
   if (historyRows.length === 0) {
     return NextResponse.json({ items: [], stats: { total: 0, pending: 0, reviewed: 0 } })
@@ -47,7 +46,7 @@ export async function GET(req: NextRequest) {
   const qIds = [...new Set(dedupedHistory.map(h => h.questionId))]
   const qMap = new Map<string, typeof questions.$inferSelect>()
   for (const qid of qIds) {
-    const q = db.select().from(questions).where(eq(questions.questionId, qid)).get()
+    const q = (await db.select().from(questions).where(eq(questions.questionId, qid)).limit(1))[0]
     if (q) qMap.set(qid, q)
   }
 
@@ -57,7 +56,7 @@ export async function GET(req: NextRequest) {
   )]
   const kpMap = new Map<string, typeof knowledgePoints.$inferSelect>()
   for (const kpId of kpIds) {
-    const kp = db.select().from(knowledgePoints).where(eq(knowledgePoints.kpId, kpId)).get()
+    const kp = (await db.select().from(knowledgePoints).where(eq(knowledgePoints.kpId, kpId)).limit(1))[0]
     if (kp) kpMap.set(kpId, kp)
   }
 
@@ -104,9 +103,8 @@ export async function GET(req: NextRequest) {
   }).filter(Boolean)
 
   // 统计（基于全部错题，不受 dedupe 影响太多，这里用 deduped 做近似）
-  const allWrong    = db.select().from(questionHistory)
+  const allWrong    = await db.select().from(questionHistory)
     .where(and(eq(questionHistory.userId, userId), eq(questionHistory.isCorrect, false)))
-    .all()
   const totalWrong  = new Set(allWrong.map(h => h.questionId)).size
   const pendingCount  = allWrong.filter(h => !h.reviewed).length  // 严格：有任意一条 reviewed=false
   // 取每题最新一条来判断是否已 reviewed

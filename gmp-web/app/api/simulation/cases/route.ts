@@ -26,12 +26,12 @@ export async function GET(req: NextRequest) {
   const payload = verifyToken(token)
   if (!payload) return NextResponse.json({ error: 'Invalid token' }, { status: 401 })
 
-  const rows = db.$client.prepare(`
+  const rows = await db.raw.all<{ product_name: string; dosage_form: string; dosage_category: string; section_count: number }>(`
     SELECT DISTINCT product_name, dosage_form, dosage_category,
       COUNT(*) OVER (PARTITION BY product_name) as section_count
     FROM case_library
     ORDER BY dosage_category, product_name
-  `).all() as { product_name: string; dosage_form: string; dosage_category: string; section_count: number }[]
+  `)
 
   // Group by category
   const grouped: Record<string, { product_name: string; dosage_form: string; section_count: number }[]> = {}

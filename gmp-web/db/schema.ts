@@ -1,156 +1,206 @@
 import { sql } from 'drizzle-orm'
-import { integer, real, sqliteTable, text } from 'drizzle-orm/sqlite-core'
+import { bigint, boolean, date, datetime, double, int, mysqlTable, primaryKey, serial, text, varchar } from 'drizzle-orm/mysql-core'
 
-export const users = sqliteTable('users', {
-  userId: text('user_id').primaryKey(),
-  orgId: text('org_id').notNull().default('default'),
-  groupId: text('group_id'),
-  role: text('role').notNull().default('student'),
-  persona: text('persona').notNull().default('student'),
-  displayName: text('display_name').notNull(),
-  email: text('email').notNull().unique(),
-  passwordHash: text('password_hash').notNull(),
-  createdAt: text('created_at').notNull().default(sql`(datetime('now'))`),
-  // 学生个人信息
-  realName:  text('real_name'),
-  school:    text('school'),
-  major:     text('major'),
-  className: text('class_name'),
-  studentId: text('student_id'),
-  idCard:    text('id_card'),
-  phone:     text('phone'),
+const now = sql`CURRENT_TIMESTAMP(3)`
+
+export const users = mysqlTable('users', {
+  userId: varchar('user_id', { length: 191 }).primaryKey(),
+  orgId: varchar('org_id', { length: 191 }).notNull().default('default'),
+  groupId: varchar('group_id', { length: 191 }),
+  role: varchar('role', { length: 32 }).notNull().default('student'),
+  persona: varchar('persona', { length: 32 }).notNull().default('student'),
+  displayName: varchar('display_name', { length: 255 }).notNull(),
+  email: varchar('email', { length: 255 }).notNull().unique(),
+  passwordHash: varchar('password_hash', { length: 255 }).notNull(),
+  createdAt: datetime('created_at', { mode: 'string', fsp: 3 }).notNull().default(now),
+  realName: varchar('real_name', { length: 255 }),
+  school: varchar('school', { length: 255 }),
+  major: varchar('major', { length: 255 }),
+  className: varchar('class_name', { length: 255 }),
+  teacherUserId: varchar('teacher_user_id', { length: 191 }),
+  studentId: varchar('student_id', { length: 191 }),
+  idCard: varchar('id_card', { length: 64 }),
+  phone: varchar('phone', { length: 64 }),
+  avatarUrl: text('avatar_url'),
 })
 
-export const knowledgePoints = sqliteTable('knowledge_points', {
-  kpId: text('kp_id').primaryKey(),
-  conceptId: text('concept_id'),           // 同一概念跨edu_level的关联ID
-  serialCode: text('serial_code'),         // 表格展示编号（K001/T0101/P01）
-  granularity: text('granularity'),        // 项目级 | 任务级 | 点级
-  eduLevel: text('edu_level'),             // 专科 | 本科
-  projectName: text('project_name'),       // 所属项目
-  taskName: text('task_name'),             // 所属任务
-  title: text('title').notNull(),          // 知识点名称（概念标签）
-  content: text('content'),               // 教材内容说明
-  gmpArticles: text('gmp_articles'),       // 对应GMP条款（原始文本，用于解析kp_reg_links）
-  sourceType: text('source_type').notNull().default('教材'),
-  difficulty: integer('difficulty').notNull().default(3),
-  pointType: text('point_type').notNull().default('知识点'),  // 知识点 | 技能点
-  masteryRequirement: text('mastery_requirement'),
-  embedding: text('embedding'),            // JSON序列化的float数组，用于向量检索
-  status: text('status').notNull().default('active'),
-  updatedAt: text('updated_at').notNull().default(sql`(datetime('now'))`),
+export const schoolProfiles = mysqlTable('school_profiles', {
+  schoolId: varchar('school_id', { length: 191 }).primaryKey(),
+  name: varchar('name', { length: 255 }).notNull().unique(),
+  code: varchar('code', { length: 64 }),
+  region: varchar('region', { length: 255 }),
+  contactPerson: varchar('contact_person', { length: 255 }),
+  contactPhone: varchar('contact_phone', { length: 64 }),
+  packageName: varchar('package_name', { length: 255 }).notNull().default('高校实训标准版'),
+  status: varchar('status', { length: 32 }).notNull().default('active'),
+  openedAt: date('opened_at', { mode: 'string' }),
+  expiresAt: date('expires_at', { mode: 'string' }),
+  notes: text('notes'),
+  createdAt: datetime('created_at', { mode: 'string', fsp: 3 }).notNull().default(now),
+  updatedAt: datetime('updated_at', { mode: 'string', fsp: 3 }).notNull().default(now),
 })
 
-export const kpDependencies = sqliteTable('kp_dependencies', {
-  fromKpId: text('from_kp_id').notNull().references(() => knowledgePoints.kpId),
-  toKpId: text('to_kp_id').notNull().references(() => knowledgePoints.kpId),
+export const schoolClasses = mysqlTable('school_classes', {
+  classId: varchar('class_id', { length: 191 }).primaryKey(),
+  schoolId: varchar('school_id', { length: 191 }).notNull().references(() => schoolProfiles.schoolId),
+  className: varchar('class_name', { length: 255 }).notNull(),
+  major: varchar('major', { length: 255 }),
+  educationLevel: varchar('education_level', { length: 64 }).notNull().default('本科'),
+  gradeYear: varchar('grade_year', { length: 64 }),
+  teacherUserId: varchar('teacher_user_id', { length: 191 }).references(() => users.userId),
+  studentCapacity: int('student_capacity').notNull().default(0),
+  status: varchar('status', { length: 32 }).notNull().default('active'),
+  createdAt: datetime('created_at', { mode: 'string', fsp: 3 }).notNull().default(now),
+  updatedAt: datetime('updated_at', { mode: 'string', fsp: 3 }).notNull().default(now),
 })
 
-export const kpMastery = sqliteTable('kp_mastery', {
-  userId: text('user_id').notNull().references(() => users.userId),
-  kpId: text('kp_id').notNull().references(() => knowledgePoints.kpId),
-  confidence: real('confidence').notNull().default(0),
-  attemptCount: integer('attempt_count').notNull().default(0),
-  correctCount: integer('correct_count').notNull().default(0),
-  lastTestedAt: text('last_tested_at'),
+export const systemSettings = mysqlTable('system_settings', {
+  key: varchar('key', { length: 191 }).primaryKey(),
+  value: text('value'),
+  category: varchar('category', { length: 64 }).notNull().default('system'),
+  label: varchar('label', { length: 255 }),
+  updatedAt: datetime('updated_at', { mode: 'string', fsp: 3 }).notNull().default(now),
 })
 
-export const userGameState = sqliteTable('user_game_state', {
-  userId: text('user_id').primaryKey().references(() => users.userId),
-  xp: integer('xp').notNull().default(0),
-  points: integer('points').notNull().default(0), // 积分：游戏货币，与 XP 互不换算
-  rankLevel: integer('rank_level').notNull().default(1),
-  rankTitle: text('rank_title').notNull().default('GMP新人'),
-  streakDays: integer('streak_days').notNull().default(0),
-  maxStreak: integer('max_streak').notNull().default(0),
-  punishUntil: text('punish_until'),
-  lastLoginDate: text('last_login_date'),
-})
-
-export const checkinLog = sqliteTable('checkin_log', {
-  userId: text('user_id').notNull().references(() => users.userId),
-  date: text('date').notNull(), // YYYY-MM-DD
-})
-
-export const regLibrary = sqliteTable('reg_library', {
-  regId: text('reg_id').primaryKey(),
-  docType: text('doc_type').notNull(),       // GMP正文 | GMP附录 | 法律 | 规章
-  regDoc: text('reg_doc').notNull(),          // 文件全称
-  appendixName: text('appendix_name'),        // 附录名称（非附录为空）
-  chapterName: text('chapter_name'),          // 所在章
-  sectionName: text('section_name'),          // 所在节
-  articleNum: text('article_num'),            // 条款编号（如"一"、"42"）
-  content: text('content'),                   // 条款正文
-  effectiveDate: text('effective_date'),      // 施行日期
-  issuingOrg: text('issuing_org'),            // 发布机构
-  embedding: text('embedding'),               // JSON序列化的float数组，用于向量检索
-})
-
-export const kpRegLinks = sqliteTable('kp_reg_links', {
-  id: integer('id').primaryKey({ autoIncrement: true }),
-  kpId: text('kp_id').notNull().references(() => knowledgePoints.kpId),
-  regId: text('reg_id').notNull().references(() => regLibrary.regId),
-})
-
-export const caseLibrary = sqliteTable('case_library', {
-  caseId: text('case_id').primaryKey(),              // CASE-CHM-001-001
-  productName: text('product_name').notNull(),       // 卡马西平片
-  dosageForm: text('dosage_form').notNull(),          // 片剂
-  dosageCategory: text('dosage_category').notNull(), // 化学药制剂 | 化学原料药 | 中成药 | 中药饮片 | 生物制品
-  sectionType: text('section_type').notNull(),       // 产品概述 | 处方依据 | 工艺操作 | 质量监控 | 质量标准 | 主要设备 | 工艺卫生 | 其他
-  sectionName: text('section_name'),                 // 原始章节标题
+export const knowledgePoints = mysqlTable('knowledge_points', {
+  kpId: varchar('kp_id', { length: 191 }).primaryKey(),
+  conceptId: varchar('concept_id', { length: 191 }),
+  serialCode: varchar('serial_code', { length: 64 }),
+  granularity: varchar('granularity', { length: 64 }),
+  eduLevel: varchar('edu_level', { length: 64 }),
+  projectName: varchar('project_name', { length: 255 }),
+  taskName: varchar('task_name', { length: 255 }),
+  title: varchar('title', { length: 500 }).notNull(),
   content: text('content'),
-  sourceFile: text('source_file'),                   // 来源文件名
-  embedding: text('embedding'),                      // JSON序列化float数组，用于向量检索
+  gmpArticles: text('gmp_articles'),
+  sourceType: varchar('source_type', { length: 64 }).notNull().default('教材'),
+  difficulty: int('difficulty').notNull().default(3),
+  pointType: varchar('point_type', { length: 64 }).notNull().default('知识点'),
+  masteryRequirement: text('mastery_requirement'),
+  embedding: text('embedding'),
+  status: varchar('status', { length: 32 }).notNull().default('active'),
+  updatedAt: datetime('updated_at', { mode: 'string', fsp: 3 }).notNull().default(now),
 })
 
-export const caseKpLinks = sqliteTable('case_kp_links', {
-  id: integer('id').primaryKey({ autoIncrement: true }),
-  caseId: text('case_id').notNull().references(() => caseLibrary.caseId),
-  kpId: text('kp_id').notNull().references(() => knowledgePoints.kpId),
+export const kpDependencies = mysqlTable('kp_dependencies', {
+  fromKpId: varchar('from_kp_id', { length: 191 }).notNull().references(() => knowledgePoints.kpId),
+  toKpId: varchar('to_kp_id', { length: 191 }).notNull().references(() => knowledgePoints.kpId),
 })
 
-// 前测结果 & 个性化学习方案
-export const learningPlans = sqliteTable('learning_plans', {
-  id: integer('id').primaryKey({ autoIncrement: true }),
-  userId: text('user_id').notNull().references(() => users.userId),
-  eduLevel: text('edu_level').notNull(),      // college | undergraduate
-  major: text('major').notNull(),
-  score: integer('score').notNull(),           // 0-100
-  wrongCount: integer('wrong_count').notNull().default(0),
-  planData: text('plan_data').notNull(),       // JSON: PlanItem[]
-  createdAt: text('created_at').notNull().default(sql`(datetime('now'))`),
+export const kpMastery = mysqlTable('kp_mastery', {
+  userId: varchar('user_id', { length: 191 }).notNull().references(() => users.userId),
+  kpId: varchar('kp_id', { length: 191 }).notNull().references(() => knowledgePoints.kpId),
+  confidence: double('confidence').notNull().default(0),
+  attemptCount: int('attempt_count').notNull().default(0),
+  correctCount: int('correct_count').notNull().default(0),
+  lastTestedAt: datetime('last_tested_at', { mode: 'string', fsp: 3 }),
 })
 
-export const simulationSessions = sqliteTable('simulation_sessions', {
-  id: integer('id').primaryKey({ autoIncrement: true }),
-  userId: text('user_id').notNull().references(() => users.userId),
-  productName: text('product_name').notNull(),
-  dosageCategory: text('dosage_category').notNull(),
-  score: integer('score').notNull().default(0),
-  maxScore: integer('max_score').notNull().default(0),
-  answers: text('answers').notNull().default('[]'),  // JSON: AnswerRecord[]
-  completedAt: text('completed_at').notNull().default(sql`(datetime('now'))`),
+export const userGameState = mysqlTable('user_game_state', {
+  userId: varchar('user_id', { length: 191 }).primaryKey().references(() => users.userId),
+  xp: int('xp').notNull().default(0),
+  points: int('points').notNull().default(0),
+  rankLevel: int('rank_level').notNull().default(1),
+  rankTitle: varchar('rank_title', { length: 255 }).notNull().default('GMP新人'),
+  streakDays: int('streak_days').notNull().default(0),
+  maxStreak: int('max_streak').notNull().default(0),
+  punishUntil: datetime('punish_until', { mode: 'string', fsp: 3 }),
+  lastLoginDate: date('last_login_date', { mode: 'string' }),
 })
 
-export const questionHistory = sqliteTable('question_history', {
-  id: integer('id').primaryKey({ autoIncrement: true }),
-  userId: text('user_id').notNull().references(() => users.userId),
-  questionId: text('question_id').notNull(),   // 不 FK 约束，允许删题后历史仍存在
-  userAnswer: text('user_answer').notNull(),    // 同 submit: 单选"A"，多选"ABD"
-  isCorrect: integer('is_correct', { mode: 'boolean' }).notNull(),
-  reviewed: integer('reviewed', { mode: 'boolean' }).notNull().default(false),
-  answeredAt: text('answered_at').notNull().default(sql`(datetime('now'))`),
+export const checkinLog = mysqlTable('checkin_log', {
+  userId: varchar('user_id', { length: 191 }).notNull().references(() => users.userId),
+  date: date('date', { mode: 'string' }).notNull(),
 })
 
-export const questions = sqliteTable('questions', {
-  questionId: text('question_id').primaryKey(),
-  kpId: text('kp_id'),
-  questionType: text('question_type').notNull(), // 单选题 多选题 判断题 简答题 案例题
+export const gameRewardClaims = mysqlTable('game_reward_claims', {
+  userId: varchar('user_id', { length: 191 }).notNull().references(() => users.userId),
+  rewardKey: varchar('reward_key', { length: 191 }).notNull(),
+  xp: int('xp').notNull().default(0),
+  points: int('points').notNull().default(0),
+  claimedAt: datetime('claimed_at', { mode: 'string', fsp: 3 }).notNull().default(now),
+}, table => [
+  primaryKey({ columns: [table.userId, table.rewardKey] }),
+])
+
+export const regLibrary = mysqlTable('reg_library', {
+  regId: varchar('reg_id', { length: 191 }).primaryKey(),
+  docType: varchar('doc_type', { length: 128 }).notNull(),
+  regDoc: varchar('reg_doc', { length: 500 }).notNull(),
+  appendixName: text('appendix_name'),
+  chapterName: text('chapter_name'),
+  sectionName: text('section_name'),
+  articleNum: varchar('article_num', { length: 64 }),
+  content: text('content'),
+  effectiveDate: varchar('effective_date', { length: 64 }),
+  issuingOrg: varchar('issuing_org', { length: 255 }),
+  embedding: text('embedding'),
+})
+
+export const kpRegLinks = mysqlTable('kp_reg_links', {
+  id: serial('id').primaryKey(),
+  kpId: varchar('kp_id', { length: 191 }).notNull().references(() => knowledgePoints.kpId),
+  regId: varchar('reg_id', { length: 191 }).notNull().references(() => regLibrary.regId),
+})
+
+export const caseLibrary = mysqlTable('case_library', {
+  caseId: varchar('case_id', { length: 191 }).primaryKey(),
+  productName: varchar('product_name', { length: 255 }).notNull(),
+  dosageForm: varchar('dosage_form', { length: 128 }).notNull(),
+  dosageCategory: varchar('dosage_category', { length: 128 }).notNull(),
+  sectionType: varchar('section_type', { length: 128 }).notNull(),
+  sectionName: varchar('section_name', { length: 255 }),
+  content: text('content'),
+  sourceFile: varchar('source_file', { length: 500 }),
+  embedding: text('embedding'),
+})
+
+export const caseKpLinks = mysqlTable('case_kp_links', {
+  id: serial('id').primaryKey(),
+  caseId: varchar('case_id', { length: 191 }).notNull().references(() => caseLibrary.caseId),
+  kpId: varchar('kp_id', { length: 191 }).notNull().references(() => knowledgePoints.kpId),
+})
+
+export const learningPlans = mysqlTable('learning_plans', {
+  id: serial('id').primaryKey(),
+  userId: varchar('user_id', { length: 191 }).notNull().references(() => users.userId),
+  eduLevel: varchar('edu_level', { length: 64 }).notNull(),
+  major: varchar('major', { length: 255 }).notNull(),
+  score: int('score').notNull(),
+  wrongCount: int('wrong_count').notNull().default(0),
+  planData: text('plan_data').notNull(),
+  createdAt: datetime('created_at', { mode: 'string', fsp: 3 }).notNull().default(now),
+})
+
+export const simulationSessions = mysqlTable('simulation_sessions', {
+  id: serial('id').primaryKey(),
+  userId: varchar('user_id', { length: 191 }).notNull().references(() => users.userId),
+  productName: varchar('product_name', { length: 255 }).notNull(),
+  dosageCategory: varchar('dosage_category', { length: 128 }).notNull(),
+  score: int('score').notNull().default(0),
+  maxScore: int('max_score').notNull().default(0),
+  answers: text('answers').notNull().default('[]'),
+  completedAt: datetime('completed_at', { mode: 'string', fsp: 3 }).notNull().default(now),
+})
+
+export const questionHistory = mysqlTable('question_history', {
+  id: serial('id').primaryKey(),
+  userId: varchar('user_id', { length: 191 }).notNull().references(() => users.userId),
+  questionId: varchar('question_id', { length: 191 }).notNull(),
+  userAnswer: text('user_answer').notNull(),
+  isCorrect: boolean('is_correct').notNull(),
+  reviewed: boolean('reviewed').notNull().default(false),
+  answeredAt: datetime('answered_at', { mode: 'string', fsp: 3 }).notNull().default(now),
+})
+
+export const questions = mysqlTable('questions', {
+  questionId: varchar('question_id', { length: 191 }).primaryKey(),
+  kpId: varchar('kp_id', { length: 191 }),
+  questionType: varchar('question_type', { length: 64 }).notNull(),
   stem: text('stem').notNull(),
   correctAnswer: text('correct_answer').notNull(),
-  difficulty: text('difficulty').notNull().default('中'), // 易 中 难
-  optionCount: integer('option_count'),
+  difficulty: varchar('difficulty', { length: 32 }).notNull().default('中'),
+  optionCount: int('option_count'),
   optionA: text('option_a'),
   optionB: text('option_b'),
   optionC: text('option_c'),
@@ -159,135 +209,190 @@ export const questions = sqliteTable('questions', {
   optionF: text('option_f'),
   optionG: text('option_g'),
   explanation: text('explanation'),
-  projectName: text('project_name'),   // 所属项目名（由 extract 脚本写入）
-  eduLevel: text('edu_level'),         // college | undergraduate
-  status: text('status').notNull().default('active'),
-  createdAt: text('created_at').notNull().default(sql`(datetime('now'))`),
+  projectName: varchar('project_name', { length: 255 }),
+  eduLevel: varchar('edu_level', { length: 64 }),
+  status: varchar('status', { length: 32 }).notNull().default('active'),
+  createdAt: datetime('created_at', { mode: 'string', fsp: 3 }).notNull().default(now),
 })
 
-// ── 技能库 ──────────────────────────────────────────────────────────────────
-
-export const skillLibrary = sqliteTable('skill_library', {
-  skillId:           text('skill_id').primaryKey(),           // SK-001 …
-  skillName:         text('skill_name').notNull(),            // 技能点名称（概念标签）
-  skillCategory:     text('skill_category').notNull(),        // 工具应用/操作执行/分析判断/文件编制/沟通应对
-  eduLevel:          text('edu_level').notNull().default('通用'), // 专科/本科/通用
-  difficulty:        integer('difficulty').notNull().default(3),  // 1-5
-  description:       text('description'),                     // 技能点详细说明
-  masteryStdCollege: text('mastery_std_college'),             // 专科达标标准
-  masteryStdUg:      text('mastery_std_ug'),                  // 本科达标标准
-  defectSource:      text('defect_source'),                   // 触发该技能的典型缺陷场景
-  toolName:          text('tool_name'),                       // 主要依赖工具名称
-  embedding:         text('embedding'),                       // JSON float 数组，向量检索用
-  status:            text('status').notNull().default('active'),
+export const skillLibrary = mysqlTable('skill_library', {
+  skillId: varchar('skill_id', { length: 191 }).primaryKey(),
+  skillName: varchar('skill_name', { length: 255 }).notNull(),
+  skillCategory: varchar('skill_category', { length: 128 }).notNull(),
+  eduLevel: varchar('edu_level', { length: 64 }).notNull().default('通用'),
+  difficulty: int('difficulty').notNull().default(3),
+  description: text('description'),
+  masteryStdCollege: text('mastery_std_college'),
+  masteryStdUg: text('mastery_std_ug'),
+  defectSource: text('defect_source'),
+  toolName: varchar('tool_name', { length: 255 }),
+  embedding: text('embedding'),
+  status: varchar('status', { length: 32 }).notNull().default('active'),
 })
 
-// 技能 → 法规条款（多对多）
-export const skillRegLinks = sqliteTable('skill_reg_links', {
-  id:      integer('id').primaryKey({ autoIncrement: true }),
-  skillId: text('skill_id').notNull().references(() => skillLibrary.skillId),
-  regId:   text('reg_id').notNull().references(() => regLibrary.regId),
+export const skillRegLinks = mysqlTable('skill_reg_links', {
+  id: serial('id').primaryKey(),
+  skillId: varchar('skill_id', { length: 191 }).notNull().references(() => skillLibrary.skillId),
+  regId: varchar('reg_id', { length: 191 }).notNull().references(() => regLibrary.regId),
 })
 
-// 技能 → 实训项目（多对多）
-export const skillTrainingLinks = sqliteTable('skill_training_links', {
-  id:         integer('id').primaryKey({ autoIncrement: true }),
-  skillId:    text('skill_id').notNull().references(() => skillLibrary.skillId),
-  trainingId: text('training_id').notNull(),   // T01 ~ T11，外键由应用层保证（training_projects）
-  isPrimary:  integer('is_primary', { mode: 'boolean' }).notNull().default(true),
+export const trainingProjects = mysqlTable('training_projects', {
+  trainingId: varchar('training_id', { length: 191 }).primaryKey(),
+  displayName: varchar('display_name', { length: 255 }).notNull(),
+  kpProjUg: varchar('kp_proj_ug', { length: 255 }),
+  kpProjCol: varchar('kp_proj_col', { length: 255 }),
+  hoursCollege: int('hours_college'),
+  hoursUg: int('hours_ug'),
+  seqOrder: int('seq_order').notNull(),
 })
 
-// 实训项目主表
-export const trainingProjects = sqliteTable('training_projects', {
-  trainingId:   text('training_id').primaryKey(),        // T01 ~ T11
-  displayName:  text('display_name').notNull(),          // 项目简称
-  kpProjUg:     text('kp_proj_ug'),                      // 本科KP表中的project_name精确值
-  kpProjCol:    text('kp_proj_col'),                     // 专科KP表中的project_name精确值
-  hoursCollege: integer('hours_college'),                // 专科学时
-  hoursUg:      integer('hours_ug'),                     // 本科学时
-  seqOrder:     integer('seq_order').notNull(),          // 显示排序 1~11
+export const skillTrainingLinks = mysqlTable('skill_training_links', {
+  id: serial('id').primaryKey(),
+  skillId: varchar('skill_id', { length: 191 }).notNull().references(() => skillLibrary.skillId),
+  trainingId: varchar('training_id', { length: 191 }).notNull().references(() => trainingProjects.trainingId),
+  isPrimary: boolean('is_primary').notNull().default(true),
 })
 
-// ── 模块课时分 ──────────────────────────────────────────────────────────────
-// 记录学生完成各实训项目模块测试的成绩与换算后的课时分
-// earned_hours = (project_hours / total_project_hours) × target_hours(48/54) × (score/100)
-export const moduleScores = sqliteTable('module_scores', {
-  id:          integer('id').primaryKey({ autoIncrement: true }),
-  userId:      text('user_id').notNull().references(() => users.userId),
-  trainingId:  text('training_id').notNull(),    // T01 ~ T11
-  eduLevel:    text('edu_level').notNull(),       // college | undergraduate
-  score:       integer('score').notNull(),        // 0-100
-  earnedHours: real('earned_hours').notNull(),    // 换算后课时分（保留2位小数）
-  completedAt: text('completed_at').notNull().default(sql`(datetime('now'))`),
+export const moduleScores = mysqlTable('module_scores', {
+  id: serial('id').primaryKey(),
+  userId: varchar('user_id', { length: 191 }).notNull().references(() => users.userId),
+  trainingId: varchar('training_id', { length: 191 }).notNull().references(() => trainingProjects.trainingId),
+  eduLevel: varchar('edu_level', { length: 64 }).notNull(),
+  score: int('score').notNull(),
+  earnedHours: double('earned_hours').notNull(),
+  completedAt: datetime('completed_at', { mode: 'string', fsp: 3 }).notNull().default(now),
 })
 
-// 技能 → 知识点（多对多，带置信度）
-export const skillKpLinks = sqliteTable('skill_kp_links', {
-  id:         integer('id').primaryKey({ autoIncrement: true }),
-  skillId:    text('skill_id').notNull().references(() => skillLibrary.skillId),
-  kpId:       text('kp_id').notNull().references(() => knowledgePoints.kpId),
-  linkType:   text('link_type').notNull().default('reg_shared'),
-  // project_reg: 同项目+共reg (1.0) | reg_shared: 跨项目共reg (0.7) | embedding: 向量匹配
-  confidence: real('confidence').notNull().default(0.7),
+export const skillKpLinks = mysqlTable('skill_kp_links', {
+  id: serial('id').primaryKey(),
+  skillId: varchar('skill_id', { length: 191 }).notNull().references(() => skillLibrary.skillId),
+  kpId: varchar('kp_id', { length: 191 }).notNull().references(() => knowledgePoints.kpId),
+  linkType: varchar('link_type', { length: 64 }).notNull().default('reg_shared'),
+  confidence: double('confidence').notNull().default(0.7),
 })
 
-// ── 课程学习模块 ───────────────────────────────────────────────────────────
-
-// 章节讨论区主题
-export const courseDiscussions = sqliteTable('course_discussions', {
-  id:         integer('id').primaryKey({ autoIncrement: true }),
-  trainingId: text('training_id').notNull(),                       // T01 ~ T11
-  userId:     text('user_id').notNull().references(() => users.userId),
-  title:      text('title').notNull(),
-  content:    text('content').notNull(),
-  tag:        text('tag').default('提问'),                          // 提问 | 心得 | 讨论 | 答疑
-  pinned:     integer('pinned', { mode: 'boolean' }).notNull().default(false),
-  viewCount:  integer('view_count').notNull().default(0),
-  replyCount: integer('reply_count').notNull().default(0),
-  createdAt:  text('created_at').notNull().default(sql`(datetime('now'))`),
+export const courseDiscussions = mysqlTable('course_discussions', {
+  id: serial('id').primaryKey(),
+  trainingId: varchar('training_id', { length: 191 }).notNull().references(() => trainingProjects.trainingId),
+  userId: varchar('user_id', { length: 191 }).notNull().references(() => users.userId),
+  title: varchar('title', { length: 255 }).notNull(),
+  content: text('content').notNull(),
+  tag: varchar('tag', { length: 64 }).notNull().default('提问'),
+  pinned: boolean('pinned').notNull().default(false),
+  viewCount: int('view_count').notNull().default(0),
+  replyCount: int('reply_count').notNull().default(0),
+  createdAt: datetime('created_at', { mode: 'string', fsp: 3 }).notNull().default(now),
 })
 
-// 讨论区回复
-export const courseDiscussionReplies = sqliteTable('course_discussion_replies', {
-  id:           integer('id').primaryKey({ autoIncrement: true }),
-  discussionId: integer('discussion_id').notNull().references(() => courseDiscussions.id, { onDelete: 'cascade' }),
-  userId:       text('user_id').notNull().references(() => users.userId),
-  content:      text('content').notNull(),
-  isAi:         integer('is_ai', { mode: 'boolean' }).notNull().default(false),
-  createdAt:    text('created_at').notNull().default(sql`(datetime('now'))`),
+export const courseDiscussionReplies = mysqlTable('course_discussion_replies', {
+  id: serial('id').primaryKey(),
+  discussionId: bigint('discussion_id', { mode: 'number', unsigned: true }).notNull().references(() => courseDiscussions.id, { onDelete: 'cascade' }),
+  userId: varchar('user_id', { length: 191 }).notNull().references(() => users.userId),
+  content: text('content').notNull(),
+  isAi: boolean('is_ai').notNull().default(false),
+  createdAt: datetime('created_at', { mode: 'string', fsp: 3 }).notNull().default(now),
 })
 
-// 教师布置的章节作业
-export const courseAssignments = sqliteTable('course_assignments', {
-  id:             integer('id').primaryKey({ autoIncrement: true }),
-  trainingId:     text('training_id').notNull(),
-  teacherId:      text('teacher_id').notNull().references(() => users.userId),
-  title:          text('title').notNull(),
-  description:    text('description').notNull(),
-  assignmentType: text('assignment_type').notNull().default('案例分析'), // 案例分析 | 简答 | 文件编写
-  maxScore:       integer('max_score').notNull().default(100),
-  dueDate:        text('due_date'),
-  createdAt:      text('created_at').notNull().default(sql`(datetime('now'))`),
+export const courseAssignments = mysqlTable('course_assignments', {
+  id: serial('id').primaryKey(),
+  trainingId: varchar('training_id', { length: 191 }).notNull().references(() => trainingProjects.trainingId),
+  teacherId: varchar('teacher_id', { length: 191 }).notNull().references(() => users.userId),
+  title: varchar('title', { length: 255 }).notNull(),
+  description: text('description').notNull(),
+  assignmentType: varchar('assignment_type', { length: 128 }).notNull().default('案例分析'),
+  maxScore: int('max_score').notNull().default(100),
+  dueDate: datetime('due_date', { mode: 'string', fsp: 3 }),
+  createdAt: datetime('created_at', { mode: 'string', fsp: 3 }).notNull().default(now),
 })
 
-// 学生作业提交
-export const courseAssignmentSubmissions = sqliteTable('course_assignment_submissions', {
-  id:           integer('id').primaryKey({ autoIncrement: true }),
-  assignmentId: integer('assignment_id').notNull().references(() => courseAssignments.id, { onDelete: 'cascade' }),
-  userId:       text('user_id').notNull().references(() => users.userId),
-  content:      text('content').notNull(),
-  score:        integer('score'),
-  feedback:     text('feedback'),
-  submittedAt:  text('submitted_at').notNull().default(sql`(datetime('now'))`),
-  gradedAt:     text('graded_at'),
+export const courseAssignmentSubmissions = mysqlTable('course_assignment_submissions', {
+  id: serial('id').primaryKey(),
+  assignmentId: bigint('assignment_id', { mode: 'number', unsigned: true }).notNull().references(() => courseAssignments.id, { onDelete: 'cascade' }),
+  userId: varchar('user_id', { length: 191 }).notNull().references(() => users.userId),
+  content: text('content').notNull(),
+  score: int('score'),
+  feedback: text('feedback'),
+  submittedAt: datetime('submitted_at', { mode: 'string', fsp: 3 }).notNull().default(now),
+  gradedAt: datetime('graded_at', { mode: 'string', fsp: 3 }),
 })
 
-// 学习时长日志（按章节）
-export const courseStudyLogs = sqliteTable('course_study_logs', {
-  id:         integer('id').primaryKey({ autoIncrement: true }),
-  userId:     text('user_id').notNull().references(() => users.userId),
-  trainingId: text('training_id').notNull(),
-  seconds:    integer('seconds').notNull(),
-  activity:   text('activity').default('reading'),                  // reading | quiz | video | discussion
-  loggedAt:   text('logged_at').notNull().default(sql`(datetime('now'))`),
+export const courseChapterQuizzes = mysqlTable('course_chapter_quizzes', {
+  trainingId: varchar('training_id', { length: 191 }).notNull().references(() => trainingProjects.trainingId, { onDelete: 'cascade' }),
+  teacherId: varchar('teacher_id', { length: 191 }).notNull().references(() => users.userId),
+  title: varchar('title', { length: 255 }).notNull(),
+  description: text('description'),
+  questionCount: int('question_count').notNull().default(10),
+  passScore: int('pass_score').notNull().default(60),
+  durationMinutes: int('duration_minutes').notNull().default(30),
+  status: varchar('status', { length: 32 }).notNull().default('draft'),
+  createdAt: datetime('created_at', { mode: 'string', fsp: 3 }).notNull().default(now),
+  updatedAt: datetime('updated_at', { mode: 'string', fsp: 3 }).notNull().default(now),
+}, table => [
+  primaryKey({ columns: [table.trainingId, table.teacherId] }),
+])
+
+export const courseStudyLogs = mysqlTable('course_study_logs', {
+  id: serial('id').primaryKey(),
+  userId: varchar('user_id', { length: 191 }).notNull().references(() => users.userId),
+  trainingId: varchar('training_id', { length: 191 }).notNull().references(() => trainingProjects.trainingId),
+  seconds: int('seconds').notNull(),
+  activity: varchar('activity', { length: 64 }).notNull().default('reading'),
+  loggedAt: datetime('logged_at', { mode: 'string', fsp: 3 }).notNull().default(now),
+})
+
+export const courseLessons = mysqlTable('course_lessons', {
+  lessonId: varchar('lesson_id', { length: 191 }).primaryKey(),
+  trainingId: varchar('training_id', { length: 191 }).references(() => trainingProjects.trainingId),
+  teacherId: varchar('teacher_id', { length: 191 }).references(() => users.userId),
+  title: varchar('title', { length: 255 }).notNull(),
+  description: text('description'),
+  sortOrder: int('sort_order').notNull().default(0),
+  pptUrl: text('ppt_url'),
+  pptPageCount: int('ppt_page_count').notNull().default(0),
+  videoUrl: text('video_url'),
+  videoDuration: int('video_duration').notNull().default(0),
+  testQuestions: text('test_questions').notNull().default('[]'),
+  passScore: int('pass_score').notNull().default(60),
+  status: varchar('status', { length: 32 }).notNull().default('draft'),
+  createdAt: datetime('created_at', { mode: 'string', fsp: 3 }).notNull().default(now),
+  updatedAt: datetime('updated_at', { mode: 'string', fsp: 3 }).notNull().default(now),
+})
+
+export const courseLessonProgress = mysqlTable('course_lesson_progress', {
+  userId: varchar('user_id', { length: 191 }).notNull().references(() => users.userId),
+  lessonId: varchar('lesson_id', { length: 191 }).notNull().references(() => courseLessons.lessonId),
+  pptViewedPages: text('ppt_viewed_pages').notNull().default('[]'),
+  pptCompleted: boolean('ppt_completed').notNull().default(false),
+  videoWatchedSeconds: int('video_watched_seconds').notNull().default(0),
+  videoMaxPosition: int('video_max_position').notNull().default(0),
+  videoCompleted: boolean('video_completed').notNull().default(false),
+  testScore: double('test_score'),
+  testPassed: boolean('test_passed').notNull().default(false),
+  testCompleted: boolean('test_completed').notNull().default(false),
+  noteContent: text('note_content'),
+  annotationCount: int('annotation_count').notNull().default(0),
+  lessonScore: double('lesson_score').notNull().default(0),
+  completed: boolean('completed').notNull().default(false),
+  updatedAt: datetime('updated_at', { mode: 'string', fsp: 3 }).notNull().default(now),
+  completedAt: datetime('completed_at', { mode: 'string', fsp: 3 }),
+}, table => [
+  primaryKey({ columns: [table.userId, table.lessonId] }),
+])
+
+export const courseLessonAnnotations = mysqlTable('course_lesson_annotations', {
+  id: serial('id').primaryKey(),
+  userId: varchar('user_id', { length: 191 }).notNull().references(() => users.userId),
+  lessonId: varchar('lesson_id', { length: 191 }).notNull().references(() => courseLessons.lessonId, { onDelete: 'cascade' }),
+  resource: varchar('resource', { length: 32 }).notNull().default('ppt'),
+  pageNumber: int('page_number'),
+  videoTime: int('video_time'),
+  text: text('text').notNull(),
+  createdAt: datetime('created_at', { mode: 'string', fsp: 3 }).notNull().default(now),
+})
+
+export const courseFinalTests = mysqlTable('course_final_tests', {
+  userId: varchar('user_id', { length: 191 }).primaryKey().references(() => users.userId),
+  score: double('score').notNull().default(0),
+  classHourScore: double('class_hour_score').notNull().default(0),
+  completedAt: datetime('completed_at', { mode: 'string', fsp: 3 }).notNull().default(now),
 })

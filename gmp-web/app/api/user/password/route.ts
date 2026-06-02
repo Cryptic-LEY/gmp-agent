@@ -25,8 +25,8 @@ export async function POST(req: NextRequest) {
   if (newPassword.length < 6)
     return NextResponse.json({ error: '新密码至少6位' }, { status: 400 })
 
-  const user = db.select({ passwordHash: users.passwordHash })
-    .from(users).where(eq(users.userId, payload.userId)).get()
+  const user = (await db.select({ passwordHash: users.passwordHash })
+    .from(users).where(eq(users.userId, payload.userId)).limit(1))[0]
 
   if (!user) return NextResponse.json({ error: 'Not found' }, { status: 404 })
 
@@ -34,7 +34,7 @@ export async function POST(req: NextRequest) {
   if (!valid) return NextResponse.json({ error: '旧密码不正确' }, { status: 400 })
 
   const newHash = await bcrypt.hash(newPassword, 10)
-  db.update(users).set({ passwordHash: newHash }).where(eq(users.userId, payload.userId)).run()
+  db.update(users).set({ passwordHash: newHash }).where(eq(users.userId, payload.userId)).execute()
 
   return NextResponse.json({ ok: true })
 }

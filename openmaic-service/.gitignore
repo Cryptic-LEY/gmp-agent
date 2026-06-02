@@ -1,0 +1,4 @@
+data/jobs.json
+public/classrooms/*
+!public/classrooms/.gitkeep
+*.log

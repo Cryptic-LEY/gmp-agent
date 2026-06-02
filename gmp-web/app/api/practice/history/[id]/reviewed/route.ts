@@ -24,15 +24,11 @@ export async function PATCH(
 
   const { reviewed } = await req.json() as { reviewed: boolean }
 
-  const result = db
+  await db
     .update(questionHistory)
     .set({ reviewed })
     .where(and(eq(questionHistory.id, historyId), eq(questionHistory.userId, userId)))
-    .run()
-
-  if (result.changes === 0) {
-    return NextResponse.json({ error: 'Not found or not yours' }, { status: 404 })
-  }
+    .execute()
 
   return NextResponse.json({ ok: true })
 }

@@ -5,8 +5,6 @@ import { courseStudyLogs } from '@/db/schema'
 
 const VALID_ACTIVITIES = ['reading', 'quiz', 'video', 'discussion']
 
-// POST /api/course/study-log
-// body: { trainingId, seconds, activity? }
 export async function POST(req: NextRequest) {
   const token = req.headers.get('authorization')?.replace('Bearer ', '')
   if (!token) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
@@ -15,8 +13,11 @@ export async function POST(req: NextRequest) {
   const { userId } = payload
 
   let body: { trainingId?: string; seconds?: number; activity?: string }
-  try { body = await req.json() }
-  catch { return NextResponse.json({ error: '请求体格式错误' }, { status: 400 }) }
+  try {
+    body = await req.json()
+  } catch {
+    return NextResponse.json({ error: '请求体格式错误' }, { status: 400 })
+  }
 
   const { trainingId, seconds, activity } = body
   if (!trainingId || !/^T(0[1-9]|1[01])$/.test(trainingId)) {
@@ -26,11 +27,12 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: '学习时长不合法' }, { status: 400 })
   }
 
-  db.insert(courseStudyLogs).values({
-    userId, trainingId,
+  await db.insert(courseStudyLogs).values({
+    userId,
+    trainingId,
     seconds: Math.floor(seconds),
     activity: VALID_ACTIVITIES.includes(activity ?? '') ? activity! : 'reading',
-  }).run()
+  })
 
   return NextResponse.json({ ok: true })
 }

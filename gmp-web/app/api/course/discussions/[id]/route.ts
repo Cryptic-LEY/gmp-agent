@@ -1,10 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { verifyToken } from '@/lib/auth'
+import { asc, eq, sql } from 'drizzle-orm'
 import { db } from '@/db'
-import { courseDiscussions, courseDiscussionReplies, users } from '@/db/schema'
-import { eq, sql, asc } from 'drizzle-orm'
+import { courseDiscussionReplies, courseDiscussions, users } from '@/db/schema'
+import { verifyToken } from '@/lib/auth'
 
-// GET /api/course/discussions/[id] - 返回主题 + 所有回复
+function parseDiscussionId(value: string) {
+  const id = Number(value)
+  return Number.isInteger(id) && id > 0 ? id : null
+}
+
 export async function GET(
   req: NextRequest,
   context: { params: Promise<{ id: string }> },
@@ -14,10 +18,10 @@ export async function GET(
   if (!verifyToken(token)) return NextResponse.json({ error: 'Invalid token' }, { status: 401 })
 
   const { id } = await context.params
-  const discussionId = parseInt(id, 10)
-  if (isNaN(discussionId)) return NextResponse.json({ error: '无效的 ID' }, { status: 400 })
+  const discussionId = parseDiscussionId(id)
+  if (!discussionId) return NextResponse.json({ error: '无效的 ID' }, { status: 400 })
 
-  const topic = db.select({
+  const [topic] = await db.select({
     id: courseDiscussions.id,
     trainingId: courseDiscussions.trainingId,
     title: courseDiscussions.title,
@@ -33,16 +37,16 @@ export async function GET(
   })
     .from(courseDiscussions)
     .innerJoin(users, eq(courseDiscussions.userId, users.userId))
-    .where(eq(courseDiscussions.id, discussionId)).get()
+    .where(eq(courseDiscussions.id, discussionId))
+    .limit(1)
 
   if (!topic) return NextResponse.json({ error: '讨论不存在' }, { status: 404 })
 
-  // 浏览数 +1
-  db.update(courseDiscussions)
+  await db.update(courseDiscussions)
     .set({ viewCount: sql`${courseDiscussions.viewCount} + 1` })
-    .where(eq(courseDiscussions.id, discussionId)).run()
+    .where(eq(courseDiscussions.id, discussionId))
 
-  const replies = db.select({
+  const replies = await db.select({
     id: courseDiscussionReplies.id,
     content: courseDiscussionReplies.content,
     isAi: courseDiscussionReplies.isAi,
@@ -54,45 +58,48 @@ export async function GET(
     .from(courseDiscussionReplies)
     .innerJoin(users, eq(courseDiscussionReplies.userId, users.userId))
     .where(eq(courseDiscussionReplies.discussionId, discussionId))
-    .orderBy(asc(courseDiscussionReplies.createdAt)).all()
+    .orderBy(asc(courseDiscussionReplies.createdAt))
 
   return NextResponse.json({ topic, replies })
 }
 
-// POST /api/course/discussions/[id] - 发回复
-// body: { content }
 export async function POST(
   req: NextRequest,
   context: { params: Promise<{ id: string }> },
 ) {
   const token = req.headers.get('authorization')?.replace('Bearer ', '')
   if (!token) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+
   const payload = verifyToken(token)
   if (!payload) return NextResponse.json({ error: 'Invalid token' }, { status: 401 })
-  const { userId } = payload
 
   const { id } = await context.params
-  const discussionId = parseInt(id, 10)
-  if (isNaN(discussionId)) return NextResponse.json({ error: '无效的 ID' }, { status: 400 })
+  const discussionId = parseDiscussionId(id)
+  if (!discussionId) return NextResponse.json({ error: '无效的 ID' }, { status: 400 })
 
   let body: { content?: string }
-  try { body = await req.json() }
-  catch { return NextResponse.json({ error: '请求体格式错误' }, { status: 400 }) }
+  try {
+    body = await req.json()
+  } catch {
+    return NextResponse.json({ error: '请求体格式错误' }, { status: 400 })
+  }
 
-  if (!body.content?.trim()) return NextResponse.json({ error: '内容不能为空' }, { status: 400 })
+  const content = body.content?.trim()
+  if (!content) return NextResponse.json({ error: '内容不能为空' }, { status: 400 })
 
-  const topic = db.select().from(courseDiscussions).where(eq(courseDiscussions.id, discussionId)).get()
+  const [topic] = await db.select().from(courseDiscussions)
+    .where(eq(courseDiscussions.id, discussionId))
+    .limit(1)
   if (!topic) return NextResponse.json({ error: '讨论不存在' }, { status: 404 })
 
-  const result = db.insert(courseDiscussionReplies).values({
-    discussionId, userId,
-    content: body.content.trim(),
-    isAi: false,
-  }).run()
+  const result = await db.raw.run(
+    `INSERT INTO course_discussion_replies (discussion_id, user_id, content, is_ai) VALUES (?, ?, ?, 0)`,
+    [discussionId, payload.userId, content],
+  ) as { insertId?: number }
 
-  db.update(courseDiscussions)
+  await db.update(courseDiscussions)
     .set({ replyCount: sql`${courseDiscussions.replyCount} + 1` })
-    .where(eq(courseDiscussions.id, discussionId)).run()
+    .where(eq(courseDiscussions.id, discussionId))
 
-  return NextResponse.json({ id: Number(result.lastInsertRowid) })
+  return NextResponse.json({ id: Number(result.insertId ?? 0) })
 }

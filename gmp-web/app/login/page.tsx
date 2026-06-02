@@ -2,33 +2,35 @@
 
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { Eye, EyeOff } from 'lucide-react'
 
 type LoginRole = 'student' | 'teacher' | 'admin'
 
-const ROLE_OPTIONS: { key: LoginRole; label: string }[] = [
+const ROLE_OPTIONS: Array<{ key: LoginRole; label: string }> = [
   { key: 'student', label: '学生' },
   { key: 'teacher', label: '教师' },
-  { key: 'admin',   label: '管理员' },
+  { key: 'admin', label: '管理员' },
 ]
 
-// 注册只允许学生和教师（管理员由系统创建）
-const REGISTER_ROLES = ROLE_OPTIONS.filter(r => r.key !== 'admin')
+const REGISTER_ROLE_OPTIONS = ROLE_OPTIONS.filter(option => option.key !== 'admin')
 
 export default function LoginPage() {
   const router = useRouter()
-  const [mode, setMode]               = useState<'login' | 'register'>('login')
+  const [mode, setMode] = useState<'login' | 'register'>('login')
   const [selectedRole, setSelectedRole] = useState<LoginRole>('student')
-  const [email, setEmail]             = useState('')
-  const [password, setPassword]       = useState('')
+  const [email, setEmail] = useState('')
+  const [password, setPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
   const [displayName, setDisplayName] = useState('')
-  const [showPassword, setShowPassword]       = useState(false)
-  const [showConfirm, setShowConfirm]         = useState(false)
-  const [error, setError]             = useState('')
-  const [loading, setLoading]         = useState(false)
-
-  const roleOptions = mode === 'register' ? REGISTER_ROLES : ROLE_OPTIONS
+  const [realName, setRealName] = useState('')
+  const [school, setSchool] = useState('')
+  const [major, setMajor] = useState('')
+  const [className, setClassName] = useState('')
+  const [studentId, setStudentId] = useState('')
+  const [phone, setPhone] = useState('')
+  const [showPassword, setShowPassword] = useState(false)
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false)
+  const [error, setError] = useState('')
+  const [loading, setLoading] = useState(false)
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
@@ -39,68 +41,88 @@ export default function LoginPage() {
       return
     }
 
-    setLoading(true)
-
-    const url  = mode === 'login' ? '/api/auth/login' : '/api/auth/register'
-    const body = mode === 'login'
-      ? { email, password, role: selectedRole }
-      : { email, password, displayName, role: selectedRole }
-
-    const res  = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    })
-
-    const data = await res.json()
-    setLoading(false)
-
-    if (!res.ok) {
-      setError(data.error || '操作失败')
+    if (mode === 'register' && selectedRole === 'teacher' && !school.trim()) {
+      setError('请填写学校/机构')
       return
     }
 
-    localStorage.setItem('token',       data.token)
-    localStorage.setItem('userId',      data.userId)
-    localStorage.setItem('displayName', data.displayName)
+    setLoading(true)
 
-    // 教师/管理员进入各自控制台；
-    // 学生保持原始流程：→ /dashboard → layout 检查 onboarding_done → 未完成跳 /onboarding
-    if (data.role === 'teacher') { router.push('/teacher'); return }
-    if (data.role === 'admin')   { router.push('/admin');   return }
-    router.push('/dashboard')
+    const url = mode === 'login' ? '/api/auth/login' : '/api/auth/register'
+    const body = mode === 'login'
+      ? { email, password, role: selectedRole }
+      : {
+          email,
+          password,
+          displayName,
+          role: selectedRole === 'teacher' ? 'teacher' : 'student',
+          ...(selectedRole === 'teacher'
+            ? {
+                realName: realName || displayName,
+                school,
+                major,
+                className,
+                studentId,
+                phone,
+              }
+            : {}),
+        }
+
+    try {
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      })
+
+      const text = await res.text()
+      let data: any = {}
+      try {
+        data = text ? JSON.parse(text) : {}
+      } catch {
+        data = { error: text || '服务器返回了非 JSON 响应' }
+      }
+
+      if (!res.ok) {
+        setError(data.error || `请求失败：${res.status}`)
+        return
+      }
+
+      localStorage.setItem('token', data.token)
+      localStorage.setItem('userId', data.userId)
+      localStorage.setItem('displayName', data.displayName)
+      localStorage.setItem('role', data.role)
+      localStorage.setItem('onboarding_done', data.onboardingCompleted ? '1' : '')
+
+      if (data.role === 'teacher') {
+        router.push('/teacher')
+        return
+      }
+
+      if (data.role === 'admin') {
+        router.push('/admin')
+        return
+      }
+
+      router.push(data.onboardingCompleted ? '/dashboard' : '/onboarding')
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '请求失败')
+    } finally {
+      setLoading(false)
+    }
   }
 
   return (
-    <div className="min-h-screen bg-gray-50 flex items-center justify-center">
-      <div className="bg-white rounded-2xl shadow-md p-8 w-full max-w-md">
+    <div className="min-h-screen bg-gray-50 flex items-center justify-center px-4">
+      <div className="bg-white rounded-xl shadow-md p-8 w-full max-w-lg">
         <h1 className="text-2xl font-bold text-center text-blue-900 mb-2">
           GMP 助学平台
         </h1>
-        <p className="text-center text-gray-500 text-sm mb-5">
+        <p className="text-center text-gray-500 text-sm mb-6">
           {mode === 'login' ? '登录你的账号' : '创建新账号'}
         </p>
 
-        {/* 角色选择栏 */}
-        <div className="flex rounded-lg border border-gray-200 overflow-hidden mb-5">
-          {roleOptions.map(opt => (
-            <button
-              key={opt.key}
-              type="button"
-              onClick={() => { setSelectedRole(opt.key); setError('') }}
-              className={`flex-1 py-2 text-sm font-medium transition-colors ${
-                selectedRole === opt.key
-                  ? 'bg-blue-700 text-white'
-                  : 'bg-white text-gray-600 hover:bg-gray-50'
-              }`}
-            >
-              {opt.label}
-            </button>
-          ))}
-        </div>
-
         <form onSubmit={handleSubmit} className="space-y-4">
-          {/* 注册专属：姓名 */}
           {mode === 'register' && (
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">姓名</label>
@@ -108,27 +130,23 @@ export default function LoginPage() {
                 type="text"
                 value={displayName}
                 onChange={e => setDisplayName(e.target.value)}
-                required
                 className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
                 placeholder="请输入你的姓名"
               />
             </div>
           )}
 
-          {/* 邮箱 */}
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">邮箱</label>
             <input
               type="email"
               value={email}
               onChange={e => setEmail(e.target.value)}
-              required
               className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
               placeholder="请输入邮箱"
             />
           </div>
 
-          {/* 密码 */}
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">密码</label>
             <div className="relative">
@@ -136,34 +154,147 @@ export default function LoginPage() {
                 type={showPassword ? 'text' : 'password'}
                 value={password}
                 onChange={e => setPassword(e.target.value)}
-                required
-                className="w-full border border-gray-300 rounded-lg px-3 py-2 pr-10 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
                 placeholder="请输入密码"
+                autoComplete="off"
               />
-              <button type="button" onClick={() => setShowPassword(v => !v)}
-                className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600">
-                {showPassword ? <EyeOff size={15} /> : <Eye size={15} />}
-              </button>
+              {password && (
+                <button
+                  type="button"
+                  onClick={() => setShowPassword(!showPassword)}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 z-10"
+                  style={{ background: 'none', border: 'none', padding: '4px', cursor: 'pointer' }}
+                >
+                  {showPassword ? (
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                      <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24" />
+                      <line x1="1" y1="1" x2="23" y2="23" />
+                    </svg>
+                  ) : (
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                      <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+                      <circle cx="12" cy="12" r="3" />
+                    </svg>
+                  )}
+                </button>
+              )}
             </div>
           </div>
 
-          {/* 注册专属：确认密码 */}
           {mode === 'register' && (
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">确认密码</label>
               <div className="relative">
                 <input
-                  type={showConfirm ? 'text' : 'password'}
+                  type={showConfirmPassword ? 'text' : 'password'}
                   value={confirmPassword}
                   onChange={e => setConfirmPassword(e.target.value)}
-                  required
-                  className="w-full border border-gray-300 rounded-lg px-3 py-2 pr-10 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  placeholder="再次输入密码"
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  placeholder="请再次输入密码"
+                  autoComplete="off"
                 />
-                <button type="button" onClick={() => setShowConfirm(v => !v)}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600">
-                  {showConfirm ? <EyeOff size={15} /> : <Eye size={15} />}
-                </button>
+                {confirmPassword && (
+                  <button
+                    type="button"
+                    onClick={() => setShowConfirmPassword(!showConfirmPassword)}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 z-10"
+                    style={{ background: 'none', border: 'none', padding: '4px', cursor: 'pointer' }}
+                  >
+                    {showConfirmPassword ? (
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                        <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24" />
+                        <line x1="1" y1="1" x2="23" y2="23" />
+                      </svg>
+                    ) : (
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                        <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+                        <circle cx="12" cy="12" r="3" />
+                      </svg>
+                    )}
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              {mode === 'login' ? '登录角色' : '注册身份'}
+            </label>
+            <select
+              value={selectedRole}
+              onChange={e => setSelectedRole(e.target.value as LoginRole)}
+              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
+            >
+              {(mode === 'login' ? ROLE_OPTIONS : REGISTER_ROLE_OPTIONS).map(option => (
+                <option key={option.key} value={option.key}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {mode === 'register' && selectedRole === 'teacher' && (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 rounded-lg border border-blue-100 bg-blue-50/40 p-3">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">真实姓名</label>
+                <input
+                  type="text"
+                  value={realName}
+                  onChange={e => setRealName(e.target.value)}
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  placeholder="默认使用姓名"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">学校/机构</label>
+                <input
+                  type="text"
+                  value={school}
+                  onChange={e => setSchool(e.target.value)}
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  placeholder="请输入学校或机构"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">专业/部门</label>
+                <input
+                  type="text"
+                  value={major}
+                  onChange={e => setMajor(e.target.value)}
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  placeholder="如药学系"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">任教班级/岗位</label>
+                <input
+                  type="text"
+                  value={className}
+                  onChange={e => setClassName(e.target.value)}
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  placeholder="如 2024 级 GMP 班"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">工号</label>
+                <input
+                  type="text"
+                  value={studentId}
+                  onChange={e => setStudentId(e.target.value)}
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  placeholder="请输入工号"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">手机号</label>
+                <input
+                  type="tel"
+                  value={phone}
+                  onChange={e => setPhone(e.target.value)}
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  placeholder="请输入手机号"
+                />
               </div>
             </div>
           )}
@@ -184,9 +315,16 @@ export default function LoginPage() {
           <button
             onClick={() => {
               setMode(mode === 'login' ? 'register' : 'login')
-              setError('')
               setSelectedRole('student')
+              setError('')
+              setPassword('')
               setConfirmPassword('')
+              setRealName('')
+              setSchool('')
+              setMajor('')
+              setClassName('')
+              setStudentId('')
+              setPhone('')
             }}
             className="text-blue-600 hover:underline ml-1"
           >

@@ -1,12 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { verifyToken } from '@/lib/auth'
 import { db } from '@/db'
-import { moduleScores, trainingProjects, learningPlans } from '@/db/schema'
-import { eq, desc } from 'drizzle-orm'
+import { learningPlans, moduleScores, trainingProjects } from '@/db/schema'
+import { desc, eq } from 'drizzle-orm'
 
-// 课程标准总学时
 const TARGET_HOURS: Record<string, number> = {
-  college:       48,
+  college: 48,
   undergraduate: 54,
 }
 
@@ -18,79 +17,77 @@ export async function GET(req: NextRequest) {
   if (!payload) return NextResponse.json({ error: 'Invalid token' }, { status: 401 })
 
   const { userId } = payload
+  const projects = await db.select().from(trainingProjects)
 
-  // ── 1. 获取所有实训项目 ───────────────────────────────────────────────────
-  const projects = db.select().from(trainingProjects).all()
-
-  // ── 2. 推断用户学历层次 (优先取最新模块提交记录, 其次取学习方案) ───────────
   let userEduLevel = 'college'
-
-  const latestScore = db.select()
+  const latestScore = (await db
+    .select()
     .from(moduleScores)
     .where(eq(moduleScores.userId, userId))
     .orderBy(desc(moduleScores.completedAt))
-    .limit(1)
-    .get()
+    .limit(1))[0]
 
   if (latestScore) {
     userEduLevel = latestScore.eduLevel
   } else {
-    const plan = db.select()
+    const plan = (await db
+      .select()
       .from(learningPlans)
       .where(eq(learningPlans.userId, userId))
       .orderBy(desc(learningPlans.createdAt))
-      .limit(1)
-      .get()
+      .limit(1))[0]
+
     if (plan) userEduLevel = plan.eduLevel
   }
 
-  // ── 3. 计算各项目满分课时 ────────────────────────────────────────────────
-  const totalProjectHours = projects.reduce((sum, p) => {
-    const h = userEduLevel === 'undergraduate' ? (p.hoursUg ?? 0) : (p.hoursCollege ?? 0)
-    return sum + h
+  const totalProjectHours = projects.reduce((sum, project) => {
+    const hours = userEduLevel === 'undergraduate'
+      ? (project.hoursUg ?? 0)
+      : (project.hoursCollege ?? 0)
+    return sum + hours
   }, 0)
   const targetTotal = TARGET_HOURS[userEduLevel] ?? 48
 
-  // ── 4. 取每个模块的最新提交成绩 ─────────────────────────────────────────
-  const allScores = db.select()
+  const allScores = await db
+    .select()
     .from(moduleScores)
     .where(eq(moduleScores.userId, userId))
     .orderBy(desc(moduleScores.completedAt))
-    .all()
 
-  // 每个 training_id 只保留最新一条
-  const latestByModule = new Map<string, typeof allScores[0]>()
-  for (const s of allScores) {
-    if (!latestByModule.has(s.trainingId)) {
-      latestByModule.set(s.trainingId, s)
+  const latestByModule = new Map<string, typeof allScores[number]>()
+  for (const score of allScores) {
+    if (!latestByModule.has(score.trainingId)) {
+      latestByModule.set(score.trainingId, score)
     }
   }
 
-  // ── 5. 组装返回数据 ──────────────────────────────────────────────────────
-  const modules = projects
+  const modules = [...projects]
     .sort((a, b) => a.seqOrder - b.seqOrder)
-    .map(p => {
-      const projHours = userEduLevel === 'undergraduate' ? (p.hoursUg ?? 0) : (p.hoursCollege ?? 0)
+    .map(project => {
+      const projectHours = userEduLevel === 'undergraduate'
+        ? (project.hoursUg ?? 0)
+        : (project.hoursCollege ?? 0)
       const maxHours = totalProjectHours > 0
-        ? parseFloat(((projHours / totalProjectHours) * targetTotal).toFixed(2))
+        ? Number.parseFloat(((projectHours / totalProjectHours) * targetTotal).toFixed(2))
         : 0
-      const record = latestByModule.get(p.trainingId)
+      const record = latestByModule.get(project.trainingId)
+
       return {
-        trainingId:  p.trainingId,
-        displayName: p.displayName,
+        trainingId: project.trainingId,
+        displayName: project.displayName,
         maxHours,
-        score:       record?.score ?? null,
+        score: record?.score ?? null,
         earnedHours: record?.earnedHours ?? null,
         completedAt: record?.completedAt ?? null,
       }
     })
 
-  const totalEarnedHours = modules.reduce((sum, m) => sum + (m.earnedHours ?? 0), 0)
+  const totalEarnedHours = modules.reduce((sum, module) => sum + (module.earnedHours ?? 0), 0)
 
   return NextResponse.json({
-    eduLevel:        userEduLevel,
-    totalMaxHours:   targetTotal,
-    totalEarnedHours: parseFloat(totalEarnedHours.toFixed(2)),
+    eduLevel: userEduLevel,
+    totalMaxHours: targetTotal,
+    totalEarnedHours: Number.parseFloat(totalEarnedHours.toFixed(2)),
     modules,
   })
 }

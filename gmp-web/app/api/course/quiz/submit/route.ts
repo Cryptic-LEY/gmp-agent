@@ -1,28 +1,40 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { verifyToken } from '@/lib/auth'
-import { db } from '@/db'
-import {
-  questions, moduleScores, trainingProjects, kpMastery, questionHistory,
-} from '@/db/schema'
 import { and, eq, inArray } from 'drizzle-orm'
+import { db } from '@/db'
+import { kpMastery, moduleScores, questionHistory, questions, trainingProjects } from '@/db/schema'
+import { verifyToken } from '@/lib/auth'
+import { getPublishedCourseChapterQuiz } from '@/lib/course-chapter-quiz'
+import { getCourseQuizGate } from '@/lib/course-quiz-gate'
+import { getCourseScopeTeacherId } from '@/lib/course-teacher-scope'
 
 const TARGET_HOURS: Record<string, number> = { college: 48, undergraduate: 54 }
 
 interface AnswerInput {
   question_id: string
-  answer: string                    // "A" / "ABD" / "B" (判断A=对,B=错)
+  answer: string
+}
+
+function toMysqlDateTime(date = new Date()) {
+  return date.toISOString().slice(0, 23).replace('T', ' ')
+}
+
+function normalizeAnswer(value: string) {
+  return (value ?? '').trim().toUpperCase().split('').sort().join('')
 }
 
 export async function POST(req: NextRequest) {
   const token = req.headers.get('authorization')?.replace('Bearer ', '')
   if (!token) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+
   const payload = verifyToken(token)
   if (!payload) return NextResponse.json({ error: 'Invalid token' }, { status: 401 })
-  const { userId } = payload
 
   let body: { trainingId?: string; eduLevel?: string; answers?: AnswerInput[] }
-  try { body = await req.json() }
-  catch { return NextResponse.json({ error: '请求体格式错误' }, { status: 400 }) }
+  try {
+    body = await req.json()
+  } catch {
+    return NextResponse.json({ error: '请求体格式错误' }, { status: 400 })
+  }
 
   const { trainingId, eduLevel, answers } = body
   if (!trainingId || !/^T(0[1-9]|1[01])$/.test(trainingId)) {
@@ -35,91 +47,116 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: '答案不能为空' }, { status: 400 })
   }
 
-  const project = db.select().from(trainingProjects).where(eq(trainingProjects.trainingId, trainingId)).get()
+  const [project] = await db.select().from(trainingProjects)
+    .where(eq(trainingProjects.trainingId, trainingId))
+    .limit(1)
   if (!project) return NextResponse.json({ error: '章节不存在' }, { status: 404 })
 
-  // 取题目
-  const qIds = answers.map(a => a.question_id)
-  const qRows = db.select().from(questions).where(inArray(questions.questionId, qIds)).all()
-  const qMap = new Map(qRows.map(q => [q.questionId, q]))
+  const scopeTeacherId = await getCourseScopeTeacherId(payload)
+  const quizConfig = scopeTeacherId || payload.role === 'admin'
+    ? await getPublishedCourseChapterQuiz(trainingId, scopeTeacherId)
+    : null
+  if (!quizConfig) {
+    return NextResponse.json({
+      error: '教师尚未发布本章节测验',
+      trainingId,
+    }, { status: 403 })
+  }
 
-  // 评分
+  const gate = await getCourseQuizGate(payload.userId, trainingId, scopeTeacherId)
+  if (!gate.unlocked) {
+    return NextResponse.json({
+      error: '请先浏览完本章节全部 PPT 后再提交章节测验',
+      trainingId,
+      gate,
+    }, { status: 403 })
+  }
+
+  const questionIds = answers.map(answer => answer.question_id)
+  const questionRows = await db.select().from(questions).where(inArray(questions.questionId, questionIds))
+  const questionMap = new Map(questionRows.map(question => [question.questionId, question]))
+
   let correctCount = 0
   const details: Array<{ qid: string; correct: boolean; userAnswer: string; correctAnswer: string }> = []
   const kpStats = new Map<string, { attempts: number; correct: number }>()
 
-  for (const ans of answers) {
-    const q = qMap.get(ans.question_id)
-    if (!q) continue
-    // 规整答案：去空格 + 排序（多选题）
-    const ua = (ans.answer ?? '').trim().toUpperCase().split('').sort().join('')
-    const ca = (q.correctAnswer ?? '').trim().toUpperCase().split('').sort().join('')
-    const ok = ua === ca && ua.length > 0
-    if (ok) correctCount++
-    details.push({ qid: q.questionId, correct: ok, userAnswer: ans.answer, correctAnswer: q.correctAnswer })
+  for (const answer of answers) {
+    const question = questionMap.get(answer.question_id)
+    if (!question) continue
 
-    // 题目历史
-    db.insert(questionHistory).values({
-      userId,
-      questionId: q.questionId,
-      userAnswer: ans.answer,
-      isCorrect: ok,
-    }).run()
+    const userAnswer = normalizeAnswer(answer.answer)
+    const correctAnswer = normalizeAnswer(question.correctAnswer)
+    const correct = userAnswer.length > 0 && userAnswer === correctAnswer
+    if (correct) correctCount += 1
 
-    // 掌握度统计
-    if (q.kpId) {
-      const stat = kpStats.get(q.kpId) ?? { attempts: 0, correct: 0 }
-      stat.attempts++
-      if (ok) stat.correct++
-      kpStats.set(q.kpId, stat)
+    details.push({
+      qid: question.questionId,
+      correct,
+      userAnswer: answer.answer,
+      correctAnswer: question.correctAnswer,
+    })
+
+    await db.insert(questionHistory).values({
+      userId: payload.userId,
+      questionId: question.questionId,
+      userAnswer: answer.answer,
+      isCorrect: correct,
+    })
+
+    if (question.kpId) {
+      const stat = kpStats.get(question.kpId) ?? { attempts: 0, correct: 0 }
+      stat.attempts += 1
+      if (correct) stat.correct += 1
+      kpStats.set(question.kpId, stat)
     }
   }
 
-  // 更新 kp_mastery
   for (const [kpId, stat] of kpStats.entries()) {
-    const existing = db.select().from(kpMastery)
-      .where(and(eq(kpMastery.userId, userId), eq(kpMastery.kpId, kpId))).get()
-    const newAttempts = (existing?.attemptCount ?? 0) + stat.attempts
-    const newCorrect  = (existing?.correctCount ?? 0) + stat.correct
-    const newConfidence = newAttempts > 0 ? newCorrect / newAttempts : 0
+    const [existing] = await db.select().from(kpMastery)
+      .where(and(eq(kpMastery.userId, payload.userId), eq(kpMastery.kpId, kpId)))
+      .limit(1)
+    const attemptCount = (existing?.attemptCount ?? 0) + stat.attempts
+    const correctTotal = (existing?.correctCount ?? 0) + stat.correct
+    const confidence = attemptCount > 0 ? correctTotal / attemptCount : 0
+
     if (existing) {
-      db.update(kpMastery)
+      await db.update(kpMastery)
         .set({
-          attemptCount: newAttempts,
-          correctCount: newCorrect,
-          confidence: newConfidence,
-          lastTestedAt: new Date().toISOString(),
+          attemptCount,
+          correctCount: correctTotal,
+          confidence,
+          lastTestedAt: toMysqlDateTime(),
         })
-        .where(and(eq(kpMastery.userId, userId), eq(kpMastery.kpId, kpId)))
-        .run()
+        .where(and(eq(kpMastery.userId, payload.userId), eq(kpMastery.kpId, kpId)))
     } else {
-      db.insert(kpMastery).values({
-        userId, kpId,
-        attemptCount: newAttempts,
-        correctCount: newCorrect,
-        confidence: newConfidence,
-        lastTestedAt: new Date().toISOString(),
-      }).run()
+      await db.insert(kpMastery).values({
+        userId: payload.userId,
+        kpId,
+        attemptCount,
+        correctCount: correctTotal,
+        confidence,
+        lastTestedAt: toMysqlDateTime(),
+      })
     }
   }
 
-  // 计算总分（0-100）
-  const score = answers.length > 0
-    ? Math.round((correctCount / answers.length) * 100)
-    : 0
-
-  // 计算课时分
-  const projHours = eduLevel === 'undergraduate' ? (project.hoursUg ?? 0) : (project.hoursCollege ?? 0)
-  const allProjects = db.select().from(trainingProjects).all()
+  const score = answers.length > 0 ? Math.round((correctCount / answers.length) * 100) : 0
+  const projectHours = eduLevel === 'undergraduate' ? (project.hoursUg ?? 0) : (project.hoursCollege ?? 0)
+  const allProjects = await db.select().from(trainingProjects)
   const totalProjectHours = allProjects.reduce(
-    (s, p) => s + (eduLevel === 'undergraduate' ? (p.hoursUg ?? 0) : (p.hoursCollege ?? 0)), 0)
-  const targetTotal = TARGET_HOURS[eduLevel]
-  const maxHours = totalProjectHours > 0 ? (projHours / totalProjectHours) * targetTotal : 0
-  const earnedHours = parseFloat((maxHours * (score / 100)).toFixed(2))
+    (sum, item) => sum + (eduLevel === 'undergraduate' ? (item.hoursUg ?? 0) : (item.hoursCollege ?? 0)),
+    0,
+  )
+  const maxHours = totalProjectHours > 0 ? (projectHours / totalProjectHours) * TARGET_HOURS[eduLevel] : 0
+  const earnedHours = Number((maxHours * (score / 100)).toFixed(2))
 
-  db.insert(moduleScores).values({
-    userId, trainingId, eduLevel, score, earnedHours,
-  }).run()
+  await db.insert(moduleScores).values({
+    userId: payload.userId,
+    trainingId,
+    eduLevel,
+    score,
+    earnedHours,
+  })
 
   return NextResponse.json({
     trainingId,
@@ -127,8 +164,9 @@ export async function POST(req: NextRequest) {
     correctCount,
     totalCount: answers.length,
     earnedHours,
-    maxHours: parseFloat(maxHours.toFixed(2)),
-    passed: score >= 60,
+    maxHours: Number(maxHours.toFixed(2)),
+    passScore: quizConfig.passScore,
+    passed: score >= quizConfig.passScore,
     details,
   })
 }

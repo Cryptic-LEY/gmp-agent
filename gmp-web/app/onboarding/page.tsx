@@ -41,9 +41,19 @@ interface RegInfo {
   school:    string
   major:     string
   className: string
+  teacherUserId: string
   studentId: string
   idCard:    string
   phone:     string
+}
+
+interface TeacherOption {
+  userId: string
+  displayName: string
+  email: string
+  school: string
+  major: string
+  className: string
 }
 
 // ── Mock 数据 ────────────────────────────────────────────────────────────────
@@ -81,12 +91,13 @@ export default function OnboardingPage() {
 
   // Step 0 — 注册信息
   const [regInfo, setRegInfo] = useState<RegInfo>({
-    realName: '', school: '', major: '', className: '', studentId: '', idCard: '', phone: '',
+    realName: '', school: '', major: '', className: '', teacherUserId: '', studentId: '', idCard: '', phone: '',
   })
   const [regEmail, setRegEmail]       = useState('')
   const [regDisplay, setRegDisplay]   = useState('')
   const [regSaving, setRegSaving]     = useState(false)
   const [regError, setRegError]       = useState('')
+  const [teacherOptions, setTeacherOptions] = useState<TeacherOption[]>([])
 
   // Step 1 — 选择身份
   const [eduLevel, setEduLevel] = useState<string>('')
@@ -116,18 +127,26 @@ export default function OnboardingPage() {
       .then((data) => {
         setRegEmail(data.email ?? '')
         setRegDisplay(data.displayName ?? '')
+        const profileMajor = data.major ?? ''
+        setMajor(profileMajor)
         // 如果已填过注册信息则预填
         setRegInfo({
           realName:  data.realName  ?? '',
           school:    data.school    ?? '',
-          major:     data.major     ?? '',
+          major:     profileMajor,
           className: data.className ?? '',
+          teacherUserId: data.teacherUserId ?? '',
           studentId: data.studentId ?? '',
           idCard:    data.idCard    ?? '',
           phone:     data.phone     ?? '',
         })
       })
       .catch(() => {})
+
+    fetch('/api/teachers', { headers: { Authorization: `Bearer ${token}` } })
+      .then(r => r.json())
+      .then(data => setTeacherOptions(Array.isArray(data.teachers) ? data.teachers : []))
+      .catch(() => setTeacherOptions([]))
   }, [router])
 
   // ── 拉取题目 ───────────────────────────────────────────────────────────────
@@ -212,18 +231,21 @@ export default function OnboardingPage() {
     })
   }
 
-  const allAnswered   = questions.every(q => (answers[q.question_id]?.length ?? 0) > 0)
+  const allAnswered = questions.length > 0 && questions.every(q => (answers[q.question_id]?.length ?? 0) > 0)
   const answeredCount = questions.filter(q => (answers[q.question_id]?.length ?? 0) > 0).length
-  const progress      = questions.length ? Math.round((answeredCount / questions.length) * 100) : 0
+  const progress = questions.length ? Math.round((answeredCount / questions.length) * 100) : 0
 
   // ── Step 0 — 保存注册信息，进入选择身份 ──────────────────────────────────
 
   async function handleRegNext() {
     setRegError('')
-    const { realName, school, phone } = regInfo
+    const { realName, school, major, teacherUserId, phone } = regInfo
     if (!realName.trim()) { setRegError('请填写真实姓名'); return }
     if (!school.trim())   { setRegError('请填写学校名称'); return }
     if (phone && !/^1[3-9]\d{9}$/.test(phone)) { setRegError('手机号格式不正确'); return }
+
+    if (!major.trim()) { setRegError('请选择专业'); return }
+    if (!teacherUserId.trim()) { setRegError('请选择任课老师'); return }
 
     setRegSaving(true)
     try {
@@ -256,7 +278,7 @@ export default function OnboardingPage() {
 
   function handleFinish() {
     localStorage.setItem('onboarding_done', 'true')
-    router.push('/dashboard')
+    router.push('/plan')
   }
 
   // ── 步骤导航 ────────────────────────────────────────────────────────────────
@@ -390,14 +412,45 @@ export default function OnboardingPage() {
                   <label style={{ display: 'block', fontSize: 12, color: '#6b8a98', marginBottom: 4 }}>
                     {required && <span style={{ color: '#ef4444', marginRight: 2 }}>*</span>}{label}
                   </label>
-                  <input
-                    value={regInfo[key as keyof RegInfo]}
-                    onChange={e => setRegInfo(p => ({ ...p, [key]: e.target.value }))}
-                    placeholder={placeholder}
-                    style={inputStyle}
-                  />
+                  {key === 'major' ? (
+                    <select
+                      value={regInfo.major}
+                      onChange={e => {
+                        setRegInfo(p => ({ ...p, major: e.target.value }))
+                        setMajor(e.target.value)
+                      }}
+                      style={{ ...inputStyle, width: '100%' }}
+                    >
+                      <option value="">请选择专业</option>
+                      {MAJORS.map(item => <option key={item} value={item}>{item}</option>)}
+                    </select>
+                  ) : (
+                    <input
+                      value={regInfo[key as keyof RegInfo]}
+                      onChange={e => setRegInfo(p => ({ ...p, [key]: e.target.value }))}
+                      placeholder={placeholder}
+                      style={inputStyle}
+                    />
+                  )}
                 </div>
               ))}
+              <div>
+                <label style={{ display: 'block', fontSize: 12, color: '#6b8a98', marginBottom: 4 }}>
+                  <span style={{ color: '#ef4444', marginRight: 2 }}>*</span>任课老师
+                </label>
+                <select
+                  value={regInfo.teacherUserId}
+                  onChange={e => setRegInfo(p => ({ ...p, teacherUserId: e.target.value }))}
+                  style={{ ...inputStyle, width: '100%' }}
+                >
+                  <option value="">{teacherOptions.length ? '请选择任课老师' : '暂无可选择老师'}</option>
+                  {teacherOptions.map(teacher => (
+                    <option key={teacher.userId} value={teacher.userId}>
+                      {teacher.displayName}（{teacher.email}）
+                    </option>
+                  ))}
+                </select>
+              </div>
             </div>
 
             {regError && (
@@ -446,7 +499,10 @@ export default function OnboardingPage() {
             <p style={{ fontWeight: 700, fontSize: 14, color: '#183b4b', margin: '0 0 12px' }}>你的专业方向</p>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8, marginBottom: 36 }}>
               {MAJORS.map(m => (
-                <div key={m} onClick={() => setMajor(m)} style={{
+                <div key={m} onClick={() => {
+                  setMajor(m)
+                  setRegInfo(p => ({ ...p, major: m }))
+                }} style={{
                   padding: '10px 14px', borderRadius: 8, cursor: 'pointer', textAlign: 'center',
                   border: `2px solid ${major === m ? '#1d6f78' : '#dde3e8'}`,
                   background: major === m ? 'rgba(29,111,120,0.06)' : '#fff',
@@ -481,7 +537,6 @@ export default function OnboardingPage() {
               .q-judge:hover { filter: brightness(0.97); }
             `}</style>
 
-            {/* ── 顶部进度区 ─────────────────────────────────────────── */}
             <div style={{ padding: '24px 32px 18px', borderBottom: '1px solid #f0f3f5' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16 }}>
                 <div>
@@ -499,28 +554,32 @@ export default function OnboardingPage() {
                 </div>
               </div>
 
-              {/* 进度条 */}
               <div style={{ height: 3, borderRadius: 2, background: '#eef2f5' }}>
                 <div style={{
-                  height: '100%', borderRadius: 2,
+                  height: '100%',
+                  borderRadius: 2,
                   width: `${progress}%`,
                   background: 'linear-gradient(90deg, #1d6f78, #35818a)',
                   transition: 'width 0.35s ease',
                 }} />
               </div>
 
-              {/* 题号快速跳转 */}
               <div style={{ display: 'flex', gap: 4, marginTop: 12, flexWrap: 'wrap' }}>
                 {questions.map((qt, i) => {
                   const done = (answers[qt.question_id]?.length ?? 0) > 0
                   return (
                     <button
-                      key={i}
+                      key={qt.question_id}
                       onClick={() => document.getElementById(`q-card-${i}`)?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })}
                       style={{
-                        width: 26, height: 26, borderRadius: '50%',
+                        width: 26,
+                        height: 26,
+                        borderRadius: '50%',
                         border: done ? 'none' : '1.5px solid #dde6eb',
-                        cursor: 'pointer', fontSize: 10, fontWeight: 700, padding: 0,
+                        cursor: 'pointer',
+                        fontSize: 10,
+                        fontWeight: 700,
+                        padding: 0,
                         background: done ? '#1d6f78' : '#fff',
                         color: done ? '#fff' : '#93aab7',
                         transition: 'all 0.15s',
@@ -533,18 +592,17 @@ export default function OnboardingPage() {
               </div>
             </div>
 
-            {/* ── 题目列表 ─────────────────────────────────────────────── */}
             {loading ? (
               <div style={{ padding: '72px 32px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 14 }}>
                 <Loader2 size={26} style={{ animation: 'spin 1s linear infinite', color: '#1d6f78' }} />
                 <span style={{ fontSize: 13, color: '#93aab7' }}>正在生成个性化题目…</span>
               </div>
             ) : (
-              <div style={{ maxHeight: '56vh', overflowY: 'auto', padding: '16px 24px 4px', display: 'flex', flexDirection: 'column', gap: 10 }}>
+              <div style={{ maxHeight: '56vh', overflowY: 'auto', padding: '16px 24px 4px', display: 'flex', flexDirection: 'column', gap: 10, overscrollBehavior: 'contain', scrollBehavior: 'smooth' }}>
                 {questions.map((qt, i) => {
                   const isQMulti = qt.question_type === '多选题'
-                  const sel = answers[qt.question_id] ?? []
-                  const isDone = sel.length > 0
+                  const selected = answers[qt.question_id] ?? []
+                  const isDone = selected.length > 0
 
                   return (
                     <div
@@ -561,17 +619,19 @@ export default function OnboardingPage() {
                         transition: 'box-shadow 0.2s',
                       }}
                     >
-                      {/* 题号 + 标签 */}
                       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                           <span style={{
-                            fontSize: 22, fontWeight: 900, lineHeight: 1, minWidth: 30,
+                            fontSize: 22,
+                            fontWeight: 900,
+                            lineHeight: 1,
+                            minWidth: 30,
                             color: isDone ? '#1d6f78' : '#cdd8df',
                             fontVariantNumeric: 'tabular-nums',
                           }}>
                             {String(i + 1).padStart(2, '0')}
                           </span>
-                          <div style={{ display: 'flex', gap: 4 }}>
+                          <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
                             <span style={{ fontSize: 10, fontWeight: 600, color: '#5a7f8e', background: '#eef2f5', padding: '2px 8px', borderRadius: 20, letterSpacing: '0.01em' }}>
                               {qt.question_type}
                             </span>
@@ -588,31 +648,36 @@ export default function OnboardingPage() {
                         {isDone && <CheckCircle2 size={15} color="#1d6f78" strokeWidth={2.5} />}
                       </div>
 
-                      {/* 题干 */}
                       <p style={{ margin: '0 0 12px', fontSize: 14, fontWeight: 500, color: '#1c3140', lineHeight: 1.8 }}>
                         {qt.stem}
                       </p>
 
-                      {/* 选项 */}
                       {qt.question_type === '判断题' ? (
                         <div style={{ display: 'flex', gap: 8 }}>
                           {[
                             { key: 'A', label: '正确', icon: '✓', activeColor: '#15803d', activeBg: '#f0fdf4', activeBorder: '#86efac' },
                             { key: 'B', label: '错误', icon: '✗', activeColor: '#b91c1c', activeBg: '#fff1f2', activeBorder: '#fca5a5' },
                           ].map(({ key, label, icon, activeColor, activeBg, activeBorder }) => {
-                            const active = sel.includes(key)
+                            const active = selected.includes(key)
                             return (
                               <div
                                 key={key}
                                 className="q-judge"
                                 onClick={() => toggleAnswer(qt.question_id, key, false)}
                                 style={{
-                                  flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7,
-                                  padding: '11px', borderRadius: 8, cursor: 'pointer',
+                                  flex: 1,
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  justifyContent: 'center',
+                                  gap: 7,
+                                  padding: '11px',
+                                  borderRadius: 8,
+                                  cursor: 'pointer',
                                   border: `1.5px solid ${active ? activeBorder : '#dde6eb'}`,
                                   background: active ? activeBg : '#fafbfc',
                                   color: active ? activeColor : '#7a96a4',
-                                  fontSize: 13, fontWeight: active ? 700 : 500,
+                                  fontSize: 13,
+                                  fontWeight: active ? 700 : 500,
                                   transition: 'all 0.12s',
                                   userSelect: 'none',
                                 }}
@@ -625,15 +690,19 @@ export default function OnboardingPage() {
                       ) : (
                         <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
                           {(qt.options ?? []).map(({ key, text }) => {
-                            const active = sel.includes(key)
+                            const active = selected.includes(key)
                             return (
                               <div
                                 key={key}
                                 className={active ? '' : 'q-opt'}
                                 onClick={() => toggleAnswer(qt.question_id, key, isQMulti)}
                                 style={{
-                                  display: 'flex', alignItems: 'flex-start', gap: 11,
-                                  padding: '8px 10px', borderRadius: 7, cursor: 'pointer',
+                                  display: 'flex',
+                                  alignItems: 'flex-start',
+                                  gap: 11,
+                                  padding: '8px 10px',
+                                  borderRadius: 7,
+                                  cursor: 'pointer',
                                   border: `1.5px solid ${active ? '#1d6f78' : '#eaeff2'}`,
                                   background: active ? 'rgba(29,111,120,0.06)' : '#fafbfc',
                                   transition: 'all 0.12s',
@@ -641,10 +710,16 @@ export default function OnboardingPage() {
                                 }}
                               >
                                 <div style={{
-                                  width: 18, height: 18, borderRadius: isQMulti ? 4 : '50%', flexShrink: 0, marginTop: 2,
+                                  width: 18,
+                                  height: 18,
+                                  borderRadius: isQMulti ? 4 : '50%',
+                                  flexShrink: 0,
+                                  marginTop: 2,
                                   border: `2px solid ${active ? '#1d6f78' : '#c5d3da'}`,
                                   background: active ? '#1d6f78' : '#fff',
-                                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  justifyContent: 'center',
                                   transition: 'all 0.12s',
                                 }}>
                                   {active && (
@@ -668,7 +743,6 @@ export default function OnboardingPage() {
               </div>
             )}
 
-            {/* ── 底部提交 ─────────────────────────────────────────────── */}
             <div style={{ padding: '14px 24px 22px', borderTop: '1px solid #f0f3f5' }}>
               {!allAnswered && questions.length > 0 && (
                 <p style={{ margin: '0 0 10px', fontSize: 12, color: '#b45309', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5 }}>
@@ -680,22 +754,25 @@ export default function OnboardingPage() {
                 onClick={submitAnswers}
                 disabled={!allAnswered || submitting}
                 style={{
-                  width: '100%', padding: '13px', borderRadius: 10, border: 'none',
+                  width: '100%',
+                  padding: '13px',
+                  borderRadius: 10,
+                  border: 'none',
                   background: allAnswered && !submitting
                     ? 'linear-gradient(135deg, #183b4b 0%, #1d6f78 100%)'
                     : '#eef2f5',
                   color: allAnswered && !submitting ? '#fff' : '#9eb3be',
-                  fontWeight: 700, fontSize: 14,
+                  fontWeight: 700,
+                  fontSize: 14,
                   cursor: allAnswered && !submitting ? 'pointer' : 'not-allowed',
-                  display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
-                  letterSpacing: '0.02em',
-                  transition: 'opacity 0.15s',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: 8,
                 }}
               >
-                {submitting
-                  ? <><Loader2 size={14} style={{ animation: 'spin 1s linear infinite' }} />提交中…</>
-                  : <><CheckCircle2 size={14} />提交答卷</>
-                }
+                {submitting ? <Loader2 size={15} style={{ animation: 'spin 1s linear infinite' }} /> : <CheckCircle2 size={15} />}
+                {submitting ? '正在生成学习方案…' : allAnswered ? '提交答卷并生成学习方案' : '请完成全部题目'}
               </button>
             </div>
           </div>
@@ -779,7 +856,7 @@ export default function OnboardingPage() {
                 background: '#1d6f78', color: '#fff', fontWeight: 700, fontSize: 15, cursor: 'pointer',
                 display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
               }}>
-                <BookOpen size={17} />进入学习 <ChevronRight size={18} />
+                <BookOpen size={17} />进入个性化学习 <ChevronRight size={18} />
               </button>
             </div>
           </div>

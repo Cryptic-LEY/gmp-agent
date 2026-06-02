@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { verifyToken } from '@/lib/auth'
 import { db } from '@/db'
 import { learningPlans } from '@/db/schema'
+import { buildPersonalizedScheme, safeParsePlan, type PlanItem } from '@/lib/personalized-plan'
 import { eq, desc } from 'drizzle-orm'
 import {
   Document, Packer, Paragraph, TextRun, HeadingLevel,
@@ -9,18 +10,10 @@ import {
   WidthType, ShadingType, convertInchesToTwip,
 } from 'docx'
 
-interface PlanItem {
-  project_name: string
-  priority: 'high' | 'medium' | 'low'
-  reason: string
-  wrong: number
-  total: number
-}
-
 const PRIORITY_LABELS: Record<string, string> = {
-  high: '🔴 重点强化',
-  medium: '🟡 建议复习',
-  low: '🟢 基础掌握',
+  high: '重点强化',
+  medium: '建议复习',
+  low: '保持巩固',
 }
 
 // GET /api/onboarding/download-plan
@@ -35,20 +28,20 @@ export async function GET(req: NextRequest) {
   const { userId } = payload
 
   // 取最新一次前测结果
-  const latest = db.select().from(learningPlans)
+  const latest = (await db.select().from(learningPlans)
     .where(eq(learningPlans.userId, userId))
     .orderBy(desc(learningPlans.createdAt))
-    .limit(1)
-    .get()
+    .limit(1))[0]
 
   if (!latest) {
     return NextResponse.json({ error: '暂无前测记录' }, { status: 404 })
   }
 
-  const plan: PlanItem[] = JSON.parse(latest.planData)
+  const plan = safeParsePlan(latest.planData)
   const score    = latest.score
   const eduLabel = latest.eduLevel === 'undergraduate' ? '本科' : '专科'
   const dateStr  = latest.createdAt.slice(0, 10)
+  const scheme = buildPersonalizedScheme(plan, score)
 
   const levelLabel =
     score >= 80 ? '综合提升型' :
@@ -144,10 +137,55 @@ export async function GET(req: NextRequest) {
           ],
         }),
 
+        // 智能导学建议
+        new Paragraph({
+          heading: HeadingLevel.HEADING_1,
+          children: [new TextRun({ text: '二、智能导学建议', bold: true, size: 28, color: '1D6F78' })],
+          spacing: { before: 500, after: 160 },
+        }),
+        new Paragraph({
+          children: [new TextRun({ text: scheme.summary, size: 20, color: '355564' })],
+          spacing: { after: 160 },
+        }),
+        ...scheme.ai_focus.map(text =>
+          new Paragraph({
+            children: [new TextRun({ text: text, size: 20 })],
+            spacing: { after: 100 },
+            indent: { left: convertInchesToTwip(0.2) },
+          })
+        ),
+
+        // 三类学习任务
+        new Paragraph({
+          heading: HeadingLevel.HEADING_1,
+          children: [new TextRun({ text: '三、每日练习、课程学习与实训仿真', bold: true, size: 28, color: '1D6F78' })],
+          spacing: { before: 500, after: 160 },
+        }),
+        new Table({
+          width: { size: 100, type: WidthType.PERCENTAGE },
+          rows: [
+            new TableRow({
+              tableHeader: true,
+              children: ['模块', '建议频次', '当前重点', '执行说明'].map(text => new TableCell({
+                children: [new Paragraph({ children: [new TextRun({ text, bold: true, size: 22 })] })],
+                shading: { type: ShadingType.CLEAR, fill: 'E8F4F5', color: 'auto' },
+              })),
+            }),
+            ...[scheme.daily_practice, scheme.course_learning, scheme.simulation_training].map(action => new TableRow({
+              children: [
+                new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: action.title, size: 20, bold: true })] })] }),
+                new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: action.duration, size: 20 })] })] }),
+                new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: action.focus, size: 20 })] })] }),
+                new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: action.detail, size: 20 })] })] }),
+              ],
+            })),
+          ],
+        }),
+
         // 学习方案
         new Paragraph({
           heading: HeadingLevel.HEADING_1,
-          children: [new TextRun({ text: '二、个性化学习方案', bold: true, size: 28, color: '1D6F78' })],
+          children: [new TextRun({ text: '四、项目优先级', bold: true, size: 28, color: '1D6F78' })],
           spacing: { before: 500, after: 160 },
         }),
         new Paragraph({
@@ -185,10 +223,28 @@ export async function GET(req: NextRequest) {
           ],
         }),
 
+        // 7 日计划
+        new Paragraph({
+          heading: HeadingLevel.HEADING_1,
+          children: [new TextRun({ text: '五、7日执行计划', bold: true, size: 28, color: '1D6F78' })],
+          spacing: { before: 500, after: 200 },
+        }),
+        ...scheme.seven_day_plan.flatMap(item => [
+          new Paragraph({
+            children: [new TextRun({ text: `${item.day}｜${item.title}`, bold: true, size: 21, color: '183B4B' })],
+            spacing: { after: 80 },
+          }),
+          new Paragraph({
+            children: [new TextRun({ text: item.tasks.join('；'), size: 20, color: '355564' })],
+            spacing: { after: 120 },
+            indent: { left: convertInchesToTwip(0.2) },
+          }),
+        ]),
+
         // 学习建议
         new Paragraph({
           heading: HeadingLevel.HEADING_1,
-          children: [new TextRun({ text: '三、通用学习建议', bold: true, size: 28, color: '1D6F78' })],
+          children: [new TextRun({ text: '六、通用学习建议', bold: true, size: 28, color: '1D6F78' })],
           spacing: { before: 500, after: 200 },
         }),
         ...[
@@ -196,7 +252,7 @@ export async function GET(req: NextRequest) {
           '2. 优先完成「重点强化」项目的课件学习和配套练习，再逐步推进「建议复习」项目。',
           '3. 答题过程中建议善用「错题本」功能，定期回顾错题并标记已掌握的内容。',
           '4. 完成某一项目学习后，可重新做该项目的专项练习，检验掌握情况。',
-          '5. 如有疑问，可随时使用平台「AI 答疑」功能获取实时解析与延伸解读。',
+          '5. 如有疑问，可随时使用平台智能导学功能获取解析与延伸解读。',
         ].map(text =>
           new Paragraph({
             children: [new TextRun({ text, size: 20 })],

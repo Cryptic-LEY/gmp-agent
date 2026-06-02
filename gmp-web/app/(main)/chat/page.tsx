@@ -121,7 +121,7 @@ export default function ChatPage() {
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
           <div>
             <p style={{ color: '#1d6f78', fontSize: 11, fontWeight: 700, letterSpacing: '0.15em', textTransform: 'uppercase', margin: 0 }}>AI 功能</p>
-            <h1 style={{ color: '#183b4b', fontSize: 20, fontWeight: 700, margin: '3px 0 0', fontFamily: "'Trebuchet MS','Microsoft YaHei',sans-serif" }}>AI 答疑</h1>
+            <h1 style={{ color: '#183b4b', fontSize: 20, fontWeight: 700, margin: '3px 0 0', fontFamily: "'Trebuchet MS','Microsoft YaHei',sans-serif" }}>AI 助学</h1>
           </div>
 
           {/* Edu level picker */}

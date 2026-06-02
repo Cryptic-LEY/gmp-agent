@@ -24,8 +24,18 @@ interface QuizResult {
   totalCount: number
   earnedHours: number
   maxHours: number
+  passScore: number
   passed: boolean
   details: { qid: string; correct: boolean; userAnswer: string; correctAnswer: string }[]
+}
+
+interface QuizGate {
+  unlocked: boolean
+  totalPptPages: number
+  viewedPptPages: number
+  missingPages: number
+  completedLessons: number
+  requiredLessons: number
 }
 
 export default function ChapterQuizPage({ params }: { params: Promise<{ trainingId: string }> }) {
@@ -36,26 +46,46 @@ export default function ChapterQuizPage({ params }: { params: Promise<{ training
 
   const [questions, setQuestions] = useState<QuizQuestion[]>([])
   const [chapterName, setChapterName] = useState('')
+  const [passScore, setPassScore] = useState(60)
   const [answers, setAnswers] = useState<Record<string, string[]>>({})
   const [loading, setLoading] = useState(true)
   const [submitting, setSubmitting] = useState(false)
   const [result, setResult] = useState<QuizResult | null>(null)
+  const [lockedGate, setLockedGate] = useState<QuizGate | null>(null)
+  const [lockedMessage, setLockedMessage] = useState('')
   const [startTime] = useState(Date.now())
 
   useEffect(() => {
     const token = localStorage.getItem('token')
     if (!token) { router.push('/login'); return }
-    fetch(`/api/course/quiz/${trainingId}`, { headers: { Authorization: `Bearer ${token}` } })
-      .then(r => r.ok ? r.json() : null)
-      .then(d => {
+    async function loadQuiz() {
+      const res = await fetch(`/api/course/quiz/${trainingId}`, { headers: { Authorization: `Bearer ${token}` } })
+      const d = await res.json().catch(() => null)
+      if (res.status === 403) {
+        setLockedGate(d?.gate ?? null)
+        setLockedMessage(d?.error || '请先浏览完本章节全部 PPT 后再开始章节测验')
+        setChapterName(d?.displayName ?? '')
+        setLoading(false)
+        return
+      }
+      if (!res.ok) {
+        setLoading(false)
+        return
+      }
+      if (d) {
         if (!d || !d.questions?.length) {
           setLoading(false)
           return
         }
         setQuestions(d.questions)
         setChapterName(d.displayName)
+        setPassScore(Number(d.quizConfig?.passScore ?? 60))
         setLoading(false)
-      })
+      } else {
+        setLoading(false)
+      }
+    }
+    void loadQuiz()
   }, [trainingId, router])
 
   function toggleAnswer(qid: string, key: string, multi: boolean) {
@@ -84,7 +114,12 @@ export default function ChapterQuizPage({ params }: { params: Promise<{ training
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         body: JSON.stringify(payload),
       })
-      if (res.ok) {
+      if (res.status === 403) {
+        const data = await res.json().catch(() => null)
+        setLockedGate(data?.gate ?? null)
+        setLockedMessage(data?.error || '请先浏览完本章节全部 PPT 后再提交章节测验')
+        setResult(null)
+      } else if (res.ok) {
         const data: QuizResult = await res.json()
         setResult(data)
 
@@ -107,6 +142,39 @@ export default function ChapterQuizPage({ params }: { params: Promise<{ training
   const allAnswered = answeredCount === questions.length
 
   if (loading) return <div style={{ padding: 60, textAlign: 'center' }}><Loader2 size={28} className="spin" style={{ animation: 'spin 1s linear infinite' }} /></div>
+
+  if (lockedGate) {
+    const progressPct = lockedGate.totalPptPages > 0 ? Math.round((lockedGate.viewedPptPages / lockedGate.totalPptPages) * 100) : 0
+    return (
+      <div style={{ background: '#f4f6f8', minHeight: 'calc(100vh - 86px)', padding: '44px 28px' }}>
+        <div style={{ maxWidth: 620, margin: '0 auto', background: '#fff', borderRadius: 14, border: '1px solid #eaeff2', padding: '30px 32px', textAlign: 'center' }}>
+          <div style={{ width: 66, height: 66, borderRadius: '50%', background: '#fff7ed', color: '#f97316', display: 'grid', placeItems: 'center', margin: '0 auto 16px' }}>
+            <AlertCircle size={30} />
+          </div>
+          <h1 style={{ margin: '0 0 8px', fontSize: 20, color: '#1c3140' }}>章节测验暂未解锁</h1>
+      <p style={{ margin: '0 0 18px', color: '#7a96a4', fontSize: 13, lineHeight: 1.7 }}>
+            {lockedMessage || '请先浏览完本章节全部 PPT 后再开始章节测验'}{chapterName ? `：${chapterName}` : ''}
+          </p>
+          <div style={{ textAlign: 'left', marginBottom: 20 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: '#6b8a98', fontWeight: 700, marginBottom: 7 }}>
+              <span>PPT 浏览进度</span>
+              <strong>{lockedGate.viewedPptPages}/{lockedGate.totalPptPages} 页</strong>
+            </div>
+            <div style={{ height: 8, borderRadius: 999, background: '#eef2f5', overflow: 'hidden' }}>
+              <span style={{ display: 'block', width: `${Math.max(4, progressPct)}%`, height: '100%', background: 'linear-gradient(90deg, #1d6f78, #2f9e80)', borderRadius: 999 }} />
+            </div>
+          </div>
+          <button onClick={() => router.push(`/course/${trainingId}`)} style={{
+            padding: '11px 24px', borderRadius: 10, border: 'none',
+            background: '#1d6f78', color: '#fff', fontWeight: 700, fontSize: 13, cursor: 'pointer',
+            display: 'inline-flex', alignItems: 'center', gap: 6,
+          }}>
+            返回课程学习 <ArrowRight size={13} />
+          </button>
+        </div>
+      </div>
+    )
+  }
 
   if (questions.length === 0) {
     return (
@@ -138,7 +206,7 @@ export default function ChapterQuizPage({ params }: { params: Promise<{ training
             <div>
               <p style={{ margin: 0, fontSize: 11, color: '#9aacb6' }}>章节测验</p>
               <h1 style={{ margin: '3px 0 0', fontSize: 18, fontWeight: 800, color: '#1c3140', letterSpacing: '-0.01em' }}>{chapterName}</h1>
-              <p style={{ margin: '4px 0 0', fontSize: 11, color: '#9aacb6' }}>{trainingId} · 共 {questions.length} 题 · 60 分通过</p>
+              <p style={{ margin: '4px 0 0', fontSize: 11, color: '#9aacb6' }}>{trainingId} · 共 {questions.length} 题 · {passScore} 分通过</p>
             </div>
             <div style={{ textAlign: 'right' }}>
               <span style={{ fontSize: 26, fontWeight: 900, color: '#1d6f78', letterSpacing: '-0.03em' }}>{answeredCount}</span>

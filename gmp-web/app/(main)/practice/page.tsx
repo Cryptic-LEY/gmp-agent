@@ -13,6 +13,13 @@ import {
   LoaderCircle,
   Shuffle,
 } from 'lucide-react'
+import {
+  buildPracticeQuestionUrl,
+  getVisibleDifficulties,
+  selectQuestionType,
+  type DifficultiesByType,
+  type PracticeMode,
+} from '@/lib/practice-filters'
 
 interface Option {
   key: string
@@ -42,6 +49,7 @@ interface KnowledgeItem {
 interface PracticeMeta {
   questionTypes: string[]
   difficulties: string[]
+  difficultiesByType: DifficultiesByType
   projects: string[]
   knowledgeItems: KnowledgeItem[]
 }
@@ -75,9 +83,8 @@ interface SubmitResult {
   weakPointUpdated?: boolean
 }
 
-type PracticeMode = 'random' | 'type' | 'difficulty' | 'project' | 'knowledge'
-
 const QUESTION_TYPE_ORDER = ['单选题', '多选题', '判断题', '简答题', '案例分析题']
+const DIFFICULTY_ORDER = ['易', '中', '难']
 
 const DIFFICULTY_STYLE: Record<string, React.CSSProperties> = {
   易: { background: 'rgba(47,126,88,0.10)', color: '#2f7e58' },
@@ -110,10 +117,21 @@ function sortQuestionTypes(types: string[]) {
   ]
 }
 
+async function readResponseJson<T>(res: Response): Promise<(T & { error?: string }) | null> {
+  const text = await res.text()
+  if (!text) return null
+
+  try {
+    return JSON.parse(text) as T & { error?: string }
+  } catch {
+    throw new Error('服务返回内容格式异常，请稍后重试')
+  }
+}
+
 export default function PracticePage() {
   const router = useRouter()
   const [token, setToken] = useState('')
-  const [meta, setMeta] = useState<PracticeMeta>({ questionTypes: [], difficulties: [], projects: [], knowledgeItems: [] })
+  const [meta, setMeta] = useState<PracticeMeta>({ questionTypes: [], difficulties: [], difficultiesByType: {}, projects: [], knowledgeItems: [] })
   const [mode, setMode] = useState<PracticeMode>('random')
   const [questionType, setQuestionType] = useState('')
   const [difficulty, setDifficulty] = useState('')
@@ -124,6 +142,7 @@ export default function PracticePage() {
   const [selected, setSelected] = useState<string[]>([])
   const [textAnswer, setTextAnswer] = useState('')
   const [result, setResult] = useState<SubmitResult | null>(null)
+  const [submitError, setSubmitError] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [sessionXp, setSessionXp] = useState(0)
   const [sessionCorrect, setSessionCorrect] = useState(0)
@@ -132,13 +151,7 @@ export default function PracticePage() {
   const [weakPoints, setWeakPoints] = useState<string[]>([])
 
   const buildQuestionUrl = useCallback(() => {
-    const params = new URLSearchParams()
-    if (mode === 'type' && questionType) params.set('type', questionType)
-    if (mode === 'difficulty' && difficulty) params.set('difficulty', difficulty)
-    if (mode === 'project' && project) params.set('project', project)
-    if (mode === 'knowledge' && kpId) params.set('kpId', kpId)
-    const query = params.toString()
-    return `/api/practice/question${query ? `?${query}` : ''}`
+    return buildPracticeQuestionUrl({ mode, questionType, difficulty, project, kpId })
   }, [difficulty, kpId, mode, project, questionType])
 
   const fetchQuestion = useCallback(async (currentToken: string) => {
@@ -146,6 +159,7 @@ export default function PracticePage() {
     setSelected([])
     setTextAnswer('')
     setResult(null)
+    setSubmitError('')
 
     const res = await fetch(buildQuestionUrl(), { headers: { Authorization: `Bearer ${currentToken}` } })
     const data = await res.json()
@@ -172,9 +186,9 @@ export default function PracticePage() {
     fetch('/api/practice/question?meta=1', { headers: { Authorization: `Bearer ${currentToken}` } })
       .then(response => response.json())
       .then((data: PracticeMeta) => {
-        setMeta(data)
-        setQuestionType(data.questionTypes[0] ?? '')
-        setDifficulty(data.difficulties.includes('易') ? '易' : data.difficulties[0] ?? '')
+        setMeta({ ...data, difficultiesByType: data.difficultiesByType ?? {} })
+        setQuestionType('')
+        setDifficulty('')
         setProject(data.projects[0] ?? '')
         setKpId(data.knowledgeItems[0]?.kpId ?? '')
       })
@@ -186,6 +200,13 @@ export default function PracticePage() {
   }, [mode, questionType, difficulty, project, kpId, token, fetchQuestion])
 
   const visibleQuestionTypes = useMemo(() => sortQuestionTypes(meta.questionTypes), [meta.questionTypes])
+  const visibleDifficulties = useMemo(() => {
+    const values = getVisibleDifficulties(meta.difficulties, meta.difficultiesByType, mode, questionType)
+    return [
+      ...DIFFICULTY_ORDER.filter(item => values.includes(item)),
+      ...values.filter(item => !DIFFICULTY_ORDER.includes(item)),
+    ]
+  }, [meta.difficulties, meta.difficultiesByType, mode, questionType])
   const selectedKnowledge = meta.knowledgeItems.find(item => item.kpId === kpId)
   const accuracy = sessionTotal ? `${Math.round((sessionCorrect / sessionTotal) * 100)}%` : '-'
 
@@ -199,6 +220,7 @@ export default function PracticePage() {
 
   function handleSelect(key: string) {
     if (result || !question) return
+    setSubmitError('')
 
     if (question.questionType === '多选题') {
       setSelected(previous => previous.includes(key) ? previous.filter(item => item !== key) : [...previous, key])
@@ -212,6 +234,7 @@ export default function PracticePage() {
     if (!question || result || submitting || !answerValue) return
 
     setSubmitting(true)
+    setSubmitError('')
     let data: SubmitResult
 
     try {
@@ -220,7 +243,17 @@ export default function PracticePage() {
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         body: JSON.stringify({ questionId: question.questionId, answer: answerValue }),
       })
-      data = await res.json()
+      const responseData = await readResponseJson<SubmitResult>(res)
+      if (!res.ok) {
+        throw new Error(responseData?.error || `提交失败（${res.status}）`)
+      }
+      if (!responseData || typeof responseData.correct !== 'boolean') {
+        throw new Error('服务未返回批改结果，请稍后重试')
+      }
+      data = responseData
+    } catch (error) {
+      setSubmitError(error instanceof Error ? error.message : '提交失败，请稍后重试')
+      return
     } finally {
       setSubmitting(false)
     }
@@ -378,14 +411,27 @@ export default function PracticePage() {
           <div style={{ display: 'grid', gap: 8 }}>
             <span style={CONTROL_LABEL}>题型选择</span>
             <div style={TYPE_ROW}>
-              <button onClick={() => setMode('random')} style={{ ...TOP_TYPE_BTN, ...(mode === 'random' ? ACTIVE_TOP_TYPE_BTN : {}) }}>
+              <button onClick={() => { setMode('random'); setQuestionType('') }} style={{ ...TOP_TYPE_BTN, ...(mode === 'random' ? ACTIVE_TOP_TYPE_BTN : {}) }}>
                 <Shuffle size={15} />
                 随机
               </button>
               {visibleQuestionTypes.map(type => {
-                const active = mode === 'type' && questionType === type
+                const active = mode === 'filters' && questionType === type
                 return (
-                  <button key={type} onClick={() => { setMode('type'); setQuestionType(type) }} style={{ ...TOP_TYPE_BTN, ...(active ? ACTIVE_TOP_TYPE_BTN : {}) }}>
+                  <button
+                    key={type}
+                    onClick={() => {
+                      const nextSelection = selectQuestionType(
+                        type,
+                        mode === 'filters' ? difficulty : '',
+                        meta.difficultiesByType,
+                      )
+                      setMode('filters')
+                      setQuestionType(nextSelection.questionType)
+                      setDifficulty(nextSelection.difficulty)
+                    }}
+                    style={{ ...TOP_TYPE_BTN, ...(active ? ACTIVE_TOP_TYPE_BTN : {}) }}
+                  >
                     {type}
                   </button>
                 )
@@ -396,22 +442,33 @@ export default function PracticePage() {
           <div style={{ display: 'grid', gap: 8 }}>
             <span style={CONTROL_LABEL}>专项练习</span>
             <div style={SPECIAL_GRID}>
-              <div onClick={() => setMode('difficulty')} style={{ ...SPECIAL_CARD, ...(mode === 'difficulty' ? ACTIVE_SPECIAL_CARD : {}) }}>
+              <div style={{ ...SPECIAL_CARD, cursor: 'default', ...(mode === 'filters' && difficulty ? ACTIVE_SPECIAL_CARD : {}) }}>
                 <span style={SPECIAL_TITLE}><Gauge size={16} />难度练习</span>
-                <span style={SPECIAL_DESC}>按易、中、难快速抽题</span>
+                <span style={SPECIAL_DESC}>{mode === 'filters' && questionType ? '按当前题型选择难度' : '按易、中、难快速抽题'}</span>
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 7, marginTop: 10 }}>
-                  {['易', '中', '难'].filter(item => meta.difficulties.includes(item)).map(item => (
-                    <span key={item} onClick={event => { event.stopPropagation(); setMode('difficulty'); setDifficulty(item) }} style={{ ...CHIP_BTN, ...(difficulty === item && mode === 'difficulty' ? ACTIVE_CHIP : {}) }}>
+                  {visibleDifficulties.map(item => (
+                    <span
+                      key={item}
+                      onClick={event => {
+                        event.stopPropagation()
+                        if (mode === 'filters') {
+                          setDifficulty(difficulty === item ? '' : item)
+                          return
+                        }
+                        setDifficulty(item)
+                      }}
+                      style={{ ...CHIP_BTN, ...(difficulty === item ? ACTIVE_CHIP : {}) }}
+                    >
                       {item}
                     </span>
                   ))}
-                  {meta.difficulties.length === 0 && <span style={EMPTY_OPTION}>暂无难度</span>}
+                  {visibleDifficulties.length === 0 && <span style={EMPTY_OPTION}>暂无难度</span>}
                 </div>
               </div>
 
               <div onClick={() => setMode('project')} style={{ ...SPECIAL_CARD, ...(mode === 'project' ? ACTIVE_SPECIAL_CARD : {}) }}>
                 <span style={SPECIAL_TITLE}><FolderKanban size={16} />项目练习</span>
-                <span style={SPECIAL_DESC}>围绕实训项目集中练习</span>
+                <span style={SPECIAL_DESC}>围绕实训项目集中练习，可叠加难度</span>
                 <select value={project} onClick={event => event.stopPropagation()} onFocus={() => setMode('project')} onChange={event => { setMode('project'); setProject(event.target.value) }} style={{ ...SELECT_STYLE, marginTop: 10 }}>
                   {meta.projects.length === 0 ? <option value="">暂无可练项目</option> : meta.projects.map(item => <option key={item} value={item}>{item}</option>)}
                 </select>
@@ -419,7 +476,7 @@ export default function PracticePage() {
 
               <div onClick={() => setMode('knowledge')} style={{ ...SPECIAL_CARD, ...(mode === 'knowledge' ? ACTIVE_SPECIAL_CARD : {}) }}>
                 <span style={SPECIAL_TITLE}><Brain size={16} />知识点练习</span>
-                <span style={SPECIAL_DESC}>针对薄弱知识点定点强化</span>
+                <span style={SPECIAL_DESC}>针对薄弱知识点定点强化，可叠加难度</span>
                 <select value={kpId} onClick={event => event.stopPropagation()} onFocus={() => setMode('knowledge')} onChange={event => { setMode('knowledge'); setKpId(event.target.value) }} style={{ ...SELECT_STYLE, marginTop: 10 }}>
                   {meta.knowledgeItems.length === 0 ? <option value="">暂无可练知识点</option> : meta.knowledgeItems.map(item => <option key={item.kpId} value={item.kpId}>{item.title}</option>)}
                 </select>
@@ -484,6 +541,12 @@ export default function PracticePage() {
               )}
 
               {renderResult()}
+
+              {submitError && (
+                <div style={{ ...PANEL, padding: '12px 14px', borderColor: 'rgba(188,91,87,0.28)', background: 'rgba(188,91,87,0.06)', color: '#bc5b57', fontSize: 13, lineHeight: 1.6 }}>
+                  {submitError}
+                </div>
+              )}
 
               {!result ? (
                 <button onClick={handleSubmit} disabled={!canSubmit} style={{ padding: 13, borderRadius: 8, border: 'none', fontSize: 14, fontWeight: 700, cursor: canSubmit ? 'pointer' : 'not-allowed', background: canSubmit ? 'linear-gradient(135deg,#1d6f78,#35818a)' : 'rgba(31,71,92,0.08)', color: canSubmit ? '#fff' : '#6b8a98', transition: 'background 0.2s' }}>
