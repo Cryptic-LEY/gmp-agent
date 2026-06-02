@@ -19,12 +19,12 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
   }
 
-  const deps = db.select().from(kpDependencies).all()
-  const kps = db.select({
+  const deps = await db.select().from(kpDependencies)
+  const kps = await db.select({
     kpId: knowledgePoints.kpId,
     title: knowledgePoints.title,
     serialCode: knowledgePoints.serialCode,
-  }).from(knowledgePoints).all()
+  }).from(knowledgePoints)
 
   const kpMap = new Map(kps.map(item => [item.kpId, item]))
 
@@ -59,15 +59,15 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: '不能创建自我依赖' }, { status: 400 })
     }
 
-    const existing = db.select().from(kpDependencies)
+    const existing = (await db.select().from(kpDependencies)
       .where(and(eq(kpDependencies.fromKpId, fromKpId), eq(kpDependencies.toKpId, toKpId)))
-      .get()
+      .limit(1))[0]
 
     if (existing) {
       return NextResponse.json({ error: '依赖关系已存在' }, { status: 409 })
     }
 
-    db.insert(kpDependencies).values({ fromKpId, toKpId }).run()
+    await db.insert(kpDependencies).values({ fromKpId, toKpId }).execute()
     return NextResponse.json({ success: true }, { status: 201 })
   } catch (err) {
     console.error('create dependency failed', err)
@@ -89,9 +89,9 @@ export async function DELETE(req: NextRequest) {
   }
 
   try {
-    db.delete(kpDependencies)
+    await db.delete(kpDependencies)
       .where(and(eq(kpDependencies.fromKpId, fromKpId), eq(kpDependencies.toKpId, toKpId)))
-      .run()
+      .execute()
     return NextResponse.json({ success: true })
   } catch (err) {
     console.error('delete dependency failed', err)

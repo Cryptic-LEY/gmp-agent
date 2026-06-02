@@ -37,7 +37,7 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
   }
 
-  const userRows = db.select({
+  const userRows = await db.select({
     userId: users.userId,
     displayName: users.displayName,
     email: users.email,
@@ -47,34 +47,34 @@ export async function GET(req: NextRequest) {
     major: users.major,
     groupId: users.groupId,
     createdAt: users.createdAt,
-  }).from(users).all()
+  }).from(users)
 
-  const planRows = db.select({
+  const planRows = await db.select({
     userId: learningPlans.userId,
     eduLevel: learningPlans.eduLevel,
     score: learningPlans.score,
     createdAt: learningPlans.createdAt,
-  }).from(learningPlans).all()
+  }).from(learningPlans)
 
-  const knowledgeRows = db.select({
+  const knowledgeRows = await db.select({
     kpId: knowledgePoints.kpId,
     projectName: knowledgePoints.projectName,
     taskName: knowledgePoints.taskName,
     pointType: knowledgePoints.pointType,
     status: knowledgePoints.status,
-  }).from(knowledgePoints).all()
+  }).from(knowledgePoints)
 
-  const questionRows = db.select({
+  const questionRows = await db.select({
     questionId: questions.questionId,
     questionType: questions.questionType,
     difficulty: questions.difficulty,
     status: questions.status,
-  }).from(questions).all()
+  }).from(questions)
 
-  const historyRows = db.select({
+  const historyRows = await db.select({
     isCorrect: questionHistory.isCorrect,
     reviewed: questionHistory.reviewed,
-  }).from(questionHistory).all()
+  }).from(questionHistory)
 
   const latestPlanByUser = new Map<string, typeof planRows[number]>()
   for (const plan of planRows) {
@@ -129,10 +129,16 @@ export async function GET(req: NextRequest) {
     },
     modules: [
       { key: 'users', title: '用户与权限', status: 'done', desc: '账号、角色、基础资料与密码重置。' },
+      { key: 'schools', title: '学校组织', status: 'done', desc: '学校档案、班级专业、开通状态与校内数据范围。' },
+      { key: 'projects', title: '项目任务', status: 'done', desc: '项目、任务、知识点和题库覆盖情况。' },
       { key: 'mindmap', title: '知识图谱', status: 'done', desc: '知识点、技能点、项目任务与GMP条款维护。' },
+      { key: 'questions', title: '题库管理', status: 'done', desc: '题型、难度、项目归属和知识点关联查看。' },
       { key: 'deps', title: '依赖关系', status: 'done', desc: '维护知识点之间的前置依赖。' },
-      { key: 'org', title: '机构管理', status: 'todo', desc: '机构、班级、培训批次与数据范围。' },
-      { key: 'ai', title: 'AI配置', status: 'todo', desc: '模型、提示词、RAG参数与知识库更新。' },
+      { key: 'rules', title: '规则配置', status: 'done', desc: '前测规则、分数判断和个性化方案规则范围。' },
+      { key: 'monitoring', title: '系统运行监控', status: 'done', desc: '服务状态、接口调用量、AI调用量、错误日志、数据库和存储状态。' },
+      { key: 'aiConfig', title: 'AI与系统配置', status: 'done', desc: 'DashScope Key、模型、Embedding、RAG参数、提示词模板和知识库更新。' },
+      { key: 'exports', title: '统计导出', status: 'done', desc: '导出学生学习状态和题库统计。' },
+      { key: 'org', title: '多机构扩展', status: 'todo', desc: '监管机构、企业机构、套餐和跨机构数据权限。' },
       { key: 'backup', title: '备份恢复', status: 'todo', desc: '数据库备份、恢复与操作审计。' },
     ],
     systemStatus: {

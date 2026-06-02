@@ -27,7 +27,29 @@ export const XP_REWARDS: Record<string, number> = {
   '案例题': 25,
 }
 
-export const STREAK_BONUS_XP = 5 // 每天首次登录连续打卡奖励
+export const DAILY_CHECKIN_XP = 5
+export const DAILY_CHECKIN_POINTS = 5
+export const PROJECT_COMPLETION_BASE_XP = 120
+export const FINAL_BOSS_COMPLETION_BASE_XP = 220
+export const PROJECT_MEDAL_BONUS_XP: Record<'bronze' | 'silver' | 'gold', number> = {
+  bronze: 20,
+  silver: 45,
+  gold: 80,
+}
+export const STREAK_MILESTONE_XP: Record<number, number> = {
+  3: 50,
+  7: 150,
+  14: 300,
+  30: 600,
+}
+
+export function getStreakMilestoneXp(streakDays: number): number {
+  return STREAK_MILESTONE_XP[streakDays] ?? 0
+}
+
+export function getCheckinDateKey(date = new Date()): string {
+  return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai' }).format(date)
+}
 
 export function getRankByXp(xp: number): RankInfo {
   for (let i = RANKS.length - 1; i >= 0; i--) {
@@ -45,13 +67,26 @@ export function getRankProgress(xp: number): number {
   return Math.min(earned / range, 1)
 }
 
+export function getProjectCompletionXp({
+  finalBoss,
+  medal,
+  projectScore,
+}: {
+  finalBoss: boolean
+  medal: 'bronze' | 'silver' | 'gold'
+  projectScore: number
+}): number {
+  const baseXp = finalBoss ? FINAL_BOSS_COMPLETION_BASE_XP : PROJECT_COMPLETION_BASE_XP
+  const scoreBonus = Math.max(0, Math.min(40, Math.floor((projectScore - 60) / 2)))
+  return baseXp + PROJECT_MEDAL_BONUS_XP[medal] + scoreBonus
+}
+
 // 计算打卡 streak，返回新的 streakDays 和是否是今天首次登录
 export function calcStreak(
   lastLoginDate: string | null,
   currentStreak: number,
+  today = getCheckinDateKey(),
 ): { newStreak: number; isFirstLoginToday: boolean } {
-  const today = new Date().toISOString().slice(0, 10) // YYYY-MM-DD
-
   if (!lastLoginDate) {
     return { newStreak: 1, isFirstLoginToday: true }
   }
@@ -59,9 +94,9 @@ export function calcStreak(
     return { newStreak: currentStreak, isFirstLoginToday: false }
   }
 
-  const yesterday = new Date()
-  yesterday.setDate(yesterday.getDate() - 1)
-  const yesterdayStr = yesterday.toISOString().slice(0, 10)
+  const yesterday = new Date(`${today}T00:00:00+08:00`)
+  yesterday.setUTCDate(yesterday.getUTCDate() - 1)
+  const yesterdayStr = getCheckinDateKey(yesterday)
 
   if (lastLoginDate === yesterdayStr) {
     return { newStreak: currentStreak + 1, isFirstLoginToday: true }

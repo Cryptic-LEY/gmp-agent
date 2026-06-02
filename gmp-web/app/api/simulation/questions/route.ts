@@ -56,12 +56,12 @@ export async function GET(req: NextRequest) {
 
   // 1. 取案例材料（按优先级排序显示章节）
   const ORDER = ['产品概述', '工艺流程', '工艺操作', '质量监控', '质量标准', '主要设备', '工艺卫生', '处方依据', '其他', '附录']
-  const sections = db.$client.prepare(`
+  const sections = await db.raw.all<{ section_type: string; section_name: string; content: string }>(`
     SELECT section_type, section_name, content
     FROM case_library
     WHERE product_name = ? AND content IS NOT NULL AND length(content) > 10
     ORDER BY product_name
-  `).all(productName) as { section_type: string; section_name: string; content: string }[]
+  `, [productName])
 
   const sortedSections = sections.sort((a, b) => {
     const ia = ORDER.indexOf(a.section_type)
@@ -74,7 +74,7 @@ export async function GET(req: NextRequest) {
   const placeholders = projects.map(() => '?').join(',')
 
   // 先取优先项目题（过滤掉选项缺失的脏数据）
-  let questions = db.$client.prepare(`
+  let questions = await db.raw.all<Record<string, unknown>>(`
     SELECT question_id, question_type, stem, difficulty, project_name,
            option_count, option_a, option_b, option_c, option_d, option_e, option_f, option_g
     FROM questions
@@ -82,13 +82,13 @@ export async function GET(req: NextRequest) {
       AND status = 'active'
       AND project_name IN (${placeholders})
       AND (question_type = '判断题' OR (option_a IS NOT NULL AND option_a != '' AND option_b IS NOT NULL AND option_b != ''))
-    ORDER BY RANDOM()
+    ORDER BY RAND()
     LIMIT 8
-  `).all(...projects) as Array<Record<string, unknown>>
+  `, projects)
 
   // 不够则补全（同样过滤选项缺失题）
   if (questions.length < 6) {
-    const extra = db.$client.prepare(`
+    const extra = await db.raw.all<Record<string, unknown>>(`
       SELECT question_id, question_type, stem, difficulty, project_name,
              option_count, option_a, option_b, option_c, option_d, option_e, option_f, option_g
       FROM questions
@@ -96,9 +96,9 @@ export async function GET(req: NextRequest) {
         AND status = 'active'
         AND question_id NOT IN (${questions.map(() => '?').join(',') || "''"})
         AND (question_type = '判断题' OR (option_a IS NOT NULL AND option_a != '' AND option_b IS NOT NULL AND option_b != ''))
-      ORDER BY RANDOM()
+      ORDER BY RAND()
       LIMIT ?
-    `).all(...questions.map(q => q.question_id), 6 - questions.length) as Array<Record<string, unknown>>
+    `, [...questions.map(q => q.question_id as string), 6 - questions.length])
     questions = [...questions, ...extra]
   }
 

@@ -52,16 +52,31 @@ const MASTERY_COLORS = {
 
 function masteryColor(m: MasteryEntry | undefined): string {
   if (!m || m.attempt_count === 0) return MASTERY_COLORS.untested
-  if (m.confidence >= 0.8)  return MASTERY_COLORS.mastered
-  if (m.confidence >= 0.5)  return MASTERY_COLORS.learning
+  const confidence = normalizeConfidence(m.confidence)
+  if (confidence >= 0.8)  return MASTERY_COLORS.mastered
+  if (confidence >= 0.5)  return MASTERY_COLORS.learning
   return MASTERY_COLORS.weak
 }
 
 function masteryLabel(m: MasteryEntry | undefined): string {
   if (!m || m.attempt_count === 0) return '未学'
-  if (m.confidence >= 0.8)  return `掌握 ${Math.round(m.confidence * 100)}%`
-  if (m.confidence >= 0.5)  return `学习中 ${Math.round(m.confidence * 100)}%`
-  return `薄弱 ${Math.round(m.confidence * 100)}%`
+  const confidence = normalizeConfidence(m.confidence)
+  if (confidence >= 0.8)  return `掌握 ${Math.round(confidence * 100)}%`
+  if (confidence >= 0.5)  return `学习中 ${Math.round(confidence * 100)}%`
+  return `薄弱 ${Math.round(confidence * 100)}%`
+}
+
+function normalizeConfidence(value: number | undefined) {
+  if (!Number.isFinite(value)) return 0
+  return Math.max(0, Math.min(1, (value ?? 0) > 1 ? (value ?? 0) / 100 : (value ?? 0)))
+}
+
+function masteryCategory(m: MasteryEntry | undefined) {
+  if (!m || m.attempt_count === 0) return 3
+  const confidence = normalizeConfidence(m.confidence)
+  if (confidence >= 0.8) return 0
+  if (confidence >= 0.5) return 1
+  return 2
 }
 
 // ── Props ─────────────────────────────────────────────────────────────────────
@@ -121,9 +136,10 @@ export default function GraphPanel({ type, token }: { type: string; token: strin
           let mastered = 0, learning = 0, weak = 0, untested = 0
           for (const node of data.nodes) {
             const m = masteryMap[node.id]
+            const confidence = normalizeConfidence(m?.confidence)
             if (!m || m.attempt_count === 0) untested++
-            else if (m.confidence >= 0.8)    mastered++
-            else if (m.confidence >= 0.5)    learning++
+            else if (confidence >= 0.8)      mastered++
+            else if (confidence >= 0.5)      learning++
             else                             weak++
           }
           setStats({ mastered, learning, weak, untested })
@@ -135,20 +151,23 @@ export default function GraphPanel({ type, token }: { type: string; token: strin
           const m = masteryMap[node.id]
           return {
             ...node,
+            category: masteryCategory(m),
+            symbolSize: Math.max(12, node.symbolSize + (m?.attempt_count ? 4 : 0)),
             itemStyle: { color: masteryColor(m), borderColor: 'rgba(255,255,255,0.7)', borderWidth: 1.5 },
           }
         })
 
         // 掌握度模式：legend 改为四档说明，不再按项目分类
-        const masteryLegendData = isMastery ? [
-          { name: '掌握 (≥80%)',  icon: 'circle', itemStyle: { color: MASTERY_COLORS.mastered } },
-          { name: '学习中 (50-79%)', icon: 'circle', itemStyle: { color: MASTERY_COLORS.learning } },
-          { name: '薄弱 (<50%)', icon: 'circle', itemStyle: { color: MASTERY_COLORS.weak } },
-          { name: '未学',        icon: 'circle', itemStyle: { color: MASTERY_COLORS.untested } },
-        ] : null
+        const masteryCategories = [
+          { name: '掌握 (≥80%)', itemStyle: { color: MASTERY_COLORS.mastered } },
+          { name: '学习中 (50-79%)', itemStyle: { color: MASTERY_COLORS.learning } },
+          { name: '薄弱 (<50%)', itemStyle: { color: MASTERY_COLORS.weak } },
+          { name: '未学', itemStyle: { color: MASTERY_COLORS.untested } },
+        ]
+        const masteryLegendData = isMastery ? masteryCategories.map(category => category.name) : null
 
         const coloredCategories = isMastery
-          ? []
+          ? masteryCategories
           : data.categories.map((c, i) => ({
               name: c.name,
               itemStyle: { color: PALETTE[i % PALETTE.length] },
@@ -174,6 +193,7 @@ export default function GraphPanel({ type, token }: { type: string; token: strin
                 orient: 'vertical',
                 right: 10, top: 20,
                 data: masteryLegendData,
+                selectedMode: false,
                 textStyle: { fontSize: 12, color: '#46606f' },
               }
             : {
@@ -191,7 +211,7 @@ export default function GraphPanel({ type, token }: { type: string; token: strin
               layout: 'force',
               data: coloredNodes,
               links: data.edges,
-              categories: isMastery ? [] : coloredCategories,
+              categories: coloredCategories,
               roam: true,
               draggable: true,
               force: {
@@ -223,6 +243,8 @@ export default function GraphPanel({ type, token }: { type: string; token: strin
         }
 
         chart.setOption(option)
+        chart.resize()
+        window.setTimeout(() => chart?.resize(), 80)
         setLoading(false)
 
         const handleResize = () => chart?.resize()

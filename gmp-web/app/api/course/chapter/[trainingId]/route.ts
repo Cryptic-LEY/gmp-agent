@@ -1,12 +1,27 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { verifyToken } from '@/lib/auth'
+import { and, asc, desc, eq, inArray, sql } from 'drizzle-orm'
 import { db } from '@/db'
 import {
-  trainingProjects, knowledgePoints, kpMastery, kpRegLinks, regLibrary,
-  moduleScores, learningPlans, courseDiscussions, courseDiscussionReplies,
-  courseAssignments, courseAssignmentSubmissions, courseStudyLogs, users,
+  courseAssignments,
+  courseAssignmentSubmissions,
+  courseDiscussions,
+  courseLessonProgress,
+  courseLessons,
+  courseStudyLogs,
+  knowledgePoints,
+  kpMastery,
+  kpRegLinks,
+  learningPlans,
+  moduleScores,
+  regLibrary,
+  trainingProjects,
+  users,
 } from '@/db/schema'
-import { eq, desc, and, inArray, sql } from 'drizzle-orm'
+import { verifyToken } from '@/lib/auth'
+import { getPublishedCourseChapterQuiz } from '@/lib/course-chapter-quiz'
+import { boolValue, safeJsonArray } from '@/lib/course-learning'
+import { getCourseQuizGate } from '@/lib/course-quiz-gate'
+import { getCourseScopeTeacherId } from '@/lib/course-teacher-scope'
 
 export async function GET(
   req: NextRequest,
@@ -14,50 +29,52 @@ export async function GET(
 ) {
   const token = req.headers.get('authorization')?.replace('Bearer ', '')
   if (!token) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+
   const payload = verifyToken(token)
   if (!payload) return NextResponse.json({ error: 'Invalid token' }, { status: 401 })
-  const { userId } = payload
 
+  const { userId } = payload
   const { trainingId } = await context.params
+
   if (!/^T(0[1-9]|1[01])$/.test(trainingId)) {
     return NextResponse.json({ error: '无效的章节 ID' }, { status: 400 })
   }
 
-  // 1. 章节基本信息
-  const project = db.select().from(trainingProjects)
-    .where(eq(trainingProjects.trainingId, trainingId)).get()
+  const [project] = await db.select().from(trainingProjects)
+    .where(eq(trainingProjects.trainingId, trainingId))
+    .limit(1)
   if (!project) return NextResponse.json({ error: '章节不存在' }, { status: 404 })
 
-  // 2. 学历推断
-  const latestPlan = db.select().from(learningPlans)
+  const [latestPlan] = await db.select().from(learningPlans)
     .where(eq(learningPlans.userId, userId))
-    .orderBy(desc(learningPlans.createdAt)).limit(1).get()
-  const eduLevel: 'college' | 'undergraduate' = (latestPlan?.eduLevel as 'college' | 'undergraduate') || 'college'
+    .orderBy(desc(learningPlans.createdAt))
+    .limit(1)
+  const eduLevel: 'college' | 'undergraduate' =
+    latestPlan?.eduLevel === 'undergraduate' ? 'undergraduate' : 'college'
   const eduCn = eduLevel === 'undergraduate' ? '本科' : '专科'
-  const projName = eduLevel === 'undergraduate' ? project.kpProjUg : project.kpProjCol
+  const projectName = eduLevel === 'undergraduate' ? project.kpProjUg : project.kpProjCol
 
-  // 3. 章节知识点
-  const kps = projName
-    ? db.select().from(knowledgePoints)
-        .where(and(eq(knowledgePoints.projectName, projName), eq(knowledgePoints.eduLevel, eduCn))).all()
+  const kps = projectName
+    ? await db.select().from(knowledgePoints)
+      .where(and(eq(knowledgePoints.projectName, projectName), eq(knowledgePoints.eduLevel, eduCn)))
     : []
-  const kpIds = kps.map(k => k.kpId)
+  const kpIds = kps.map(kp => kp.kpId)
 
-  // 用户掌握度
   const masteryRows = kpIds.length > 0
-    ? db.select().from(kpMastery)
-        .where(and(eq(kpMastery.userId, userId), inArray(kpMastery.kpId, kpIds))).all()
+    ? await db.select().from(kpMastery)
+      .where(and(eq(kpMastery.userId, userId), inArray(kpMastery.kpId, kpIds)))
     : []
-  const masteryMap = new Map(masteryRows.map(m => [m.kpId, m]))
+  const masteryMap = new Map(masteryRows.map(row => [row.kpId, row]))
 
   const knowledgePointsResult = kps.map(kp => {
-    const m = masteryMap.get(kp.kpId)
-    const confidence = m?.confidence ?? 0
+    const mastery = masteryMap.get(kp.kpId)
+    const confidence = mastery?.confidence ?? 0
     const status: 'mastered' | 'learning' | 'weak' | 'untested' =
-      !m || m.attemptCount === 0 ? 'untested'
+      !mastery || mastery.attemptCount === 0 ? 'untested'
         : confidence >= 0.8 ? 'mastered'
         : confidence >= 0.5 ? 'learning'
         : 'weak'
+
     return {
       kpId: kp.kpId,
       title: kp.title,
@@ -65,50 +82,67 @@ export async function GET(
       difficulty: kp.difficulty,
       pointType: kp.pointType,
       taskName: kp.taskName,
-      confidence: parseFloat(confidence.toFixed(2)),
-      attemptCount: m?.attemptCount ?? 0,
+      confidence: Number(confidence.toFixed(2)),
+      attemptCount: mastery?.attemptCount ?? 0,
       status,
     }
   })
 
-  // 4. 章节关联法规（去重）
   const linkedRegs = kpIds.length > 0
-    ? db.select({
-        regId:   kpRegLinks.regId,
-        docType: regLibrary.docType,
-        regDoc:  regLibrary.regDoc,
-        chapter: regLibrary.chapterName,
-        section: regLibrary.sectionName,
-        article: regLibrary.articleNum,
-        content: regLibrary.content,
-      })
-        .from(kpRegLinks)
-        .innerJoin(regLibrary, eq(kpRegLinks.regId, regLibrary.regId))
-        .where(inArray(kpRegLinks.kpId, kpIds))
-        .all()
+    ? await db.select({
+      regId: kpRegLinks.regId,
+      docType: regLibrary.docType,
+      regDoc: regLibrary.regDoc,
+      chapter: regLibrary.chapterName,
+      section: regLibrary.sectionName,
+      article: regLibrary.articleNum,
+      content: regLibrary.content,
+    })
+      .from(kpRegLinks)
+      .innerJoin(regLibrary, eq(kpRegLinks.regId, regLibrary.regId))
+      .where(inArray(kpRegLinks.kpId, kpIds))
     : []
-  // 按 docType 分组 + 去重
+
   const seenReg = new Set<string>()
   const regsByDocType = new Map<string, typeof linkedRegs>()
-  for (const r of linkedRegs) {
-    if (seenReg.has(r.regId)) continue
-    seenReg.add(r.regId)
-    if (!regsByDocType.has(r.docType)) regsByDocType.set(r.docType, [])
-    regsByDocType.get(r.docType)!.push(r)
+  for (const reg of linkedRegs) {
+    if (seenReg.has(reg.regId)) continue
+    seenReg.add(reg.regId)
+    if (!regsByDocType.has(reg.docType)) regsByDocType.set(reg.docType, [])
+    regsByDocType.get(reg.docType)!.push(reg)
   }
   const resources = Array.from(regsByDocType.entries()).map(([docType, items]) => ({
     docType,
     count: items.length,
-    items: items.slice(0, 20),                          // 每类最多展示20条
+    items: items.slice(0, 20),
   }))
 
-  // 5. 最近一次章节测验成绩
-  const latestQuiz = db.select().from(moduleScores)
+  const [latestQuiz] = await db.select().from(moduleScores)
     .where(and(eq(moduleScores.userId, userId), eq(moduleScores.trainingId, trainingId)))
-    .orderBy(desc(moduleScores.completedAt)).limit(1).get()
+    .orderBy(desc(moduleScores.completedAt))
+    .limit(1)
+  const scopeTeacherId = await getCourseScopeTeacherId(payload)
+  const hasTeacherScope = payload.role === 'admin' || Boolean(scopeTeacherId)
+  const quizConfig = hasTeacherScope ? await getPublishedCourseChapterQuiz(trainingId, scopeTeacherId) : null
 
-  // 6. 讨论区（最近 10 条 + 总数 + 作者展示名）
-  const discussions = db.select({
+  const coursewareFilters = [eq(courseLessons.trainingId, trainingId), eq(courseLessons.status, 'published')]
+  if (scopeTeacherId) coursewareFilters.push(eq(courseLessons.teacherId, scopeTeacherId))
+  const coursewareRows = hasTeacherScope
+    ? await db.select().from(courseLessons)
+      .where(and(...coursewareFilters))
+      .orderBy(asc(courseLessons.sortOrder))
+    : []
+  const lessonIds = coursewareRows.map(lesson => lesson.lessonId)
+  const progressRows = lessonIds.length > 0
+    ? await db.select().from(courseLessonProgress)
+      .where(and(eq(courseLessonProgress.userId, userId), inArray(courseLessonProgress.lessonId, lessonIds)))
+    : []
+  const progressMap = new Map(progressRows.map(progress => [progress.lessonId, progress]))
+  const quizGate = hasTeacherScope
+    ? await getCourseQuizGate(userId, trainingId, scopeTeacherId)
+    : { unlocked: false, totalPptPages: 0, viewedPptPages: 0, missingPages: 0, completedLessons: 0, requiredLessons: 0 }
+
+  const discussions = await db.select({
     id: courseDiscussions.id,
     title: courseDiscussions.title,
     content: courseDiscussions.content,
@@ -117,62 +151,40 @@ export async function GET(
     viewCount: courseDiscussions.viewCount,
     replyCount: courseDiscussions.replyCount,
     createdAt: courseDiscussions.createdAt,
-    userId: courseDiscussions.userId,
     authorName: users.displayName,
   })
     .from(courseDiscussions)
     .innerJoin(users, eq(courseDiscussions.userId, users.userId))
     .where(eq(courseDiscussions.trainingId, trainingId))
     .orderBy(desc(courseDiscussions.pinned), desc(courseDiscussions.createdAt))
-    .limit(10).all()
+    .limit(10)
 
-  const discussionTotal = db.select({ count: sql<number>`COUNT(*)`.as('count') })
+  const [discussionTotal] = await db.select({ count: sql<number>`COUNT(*)`.as('count') })
     .from(courseDiscussions)
-    .where(eq(courseDiscussions.trainingId, trainingId)).get()
+    .where(eq(courseDiscussions.trainingId, trainingId))
 
-  // 7. 作业列表 + 本人提交状态
-  const assignments = db.select().from(courseAssignments)
-    .where(eq(courseAssignments.trainingId, trainingId))
-    .orderBy(desc(courseAssignments.createdAt)).all()
-
-  const myAssignmentIds = assignments.map(a => a.id)
-  const mySubmissions = myAssignmentIds.length > 0
-    ? db.select().from(courseAssignmentSubmissions)
-        .where(and(
-          eq(courseAssignmentSubmissions.userId, userId),
-          inArray(courseAssignmentSubmissions.assignmentId, myAssignmentIds),
-        )).all()
+  const assignmentFilters = [eq(courseAssignments.trainingId, trainingId)]
+  if (scopeTeacherId) assignmentFilters.push(eq(courseAssignments.teacherId, scopeTeacherId))
+  const assignments = hasTeacherScope
+    ? await db.select().from(courseAssignments)
+      .where(and(...assignmentFilters))
+      .orderBy(desc(courseAssignments.createdAt))
     : []
-  const submissionMap = new Map(mySubmissions.map(s => [s.assignmentId, s]))
+  const assignmentIds = assignments.map(assignment => assignment.id)
+  const mySubmissions = assignmentIds.length > 0
+    ? await db.select().from(courseAssignmentSubmissions)
+      .where(and(
+        eq(courseAssignmentSubmissions.userId, userId),
+        inArray(courseAssignmentSubmissions.assignmentId, assignmentIds),
+      ))
+    : []
+  const submissionMap = new Map(mySubmissions.map(submission => [submission.assignmentId, submission]))
 
-  const assignmentsResult = assignments.map(a => {
-    const sub = submissionMap.get(a.id)
-    return {
-      id: a.id,
-      title: a.title,
-      description: a.description,
-      assignmentType: a.assignmentType,
-      maxScore: a.maxScore,
-      dueDate: a.dueDate,
-      createdAt: a.createdAt,
-      submitted: !!sub,
-      mySubmission: sub
-        ? {
-            id: sub.id,
-            score: sub.score,
-            submittedAt: sub.submittedAt,
-            graded: sub.score !== null,
-          }
-        : null,
-    }
+  const [studyAgg] = await db.select({
+    seconds: sql<number>`COALESCE(SUM(${courseStudyLogs.seconds}), 0)`.as('seconds'),
   })
-
-  // 8. 学习时长
-  const studyAgg = db.select({ seconds: sql<number>`COALESCE(SUM(${courseStudyLogs.seconds}), 0)`.as('seconds') })
     .from(courseStudyLogs)
     .where(and(eq(courseStudyLogs.userId, userId), eq(courseStudyLogs.trainingId, trainingId)))
-    .get()
-  const studySeconds = Number(studyAgg?.seconds) || 0
 
   return NextResponse.json({
     chapter: {
@@ -181,31 +193,89 @@ export async function GET(
       seqOrder: project.seqOrder,
       eduLevel,
       hours: eduLevel === 'undergraduate' ? project.hoursUg : project.hoursCollege,
-      projectName: projName,
+      projectName,
     },
     knowledgePoints: knowledgePointsResult,
     resources,
+    courseware: coursewareRows.map(lesson => {
+      const progress = progressMap.get(lesson.lessonId)
+      const viewedPages = safeJsonArray<number>(progress?.pptViewedPages)
+        .map(page => Number(page))
+        .filter(page => Number.isFinite(page) && page >= 1 && page <= lesson.pptPageCount)
+      const pptProgress = lesson.pptPageCount > 0 ? Math.min(100, Math.round((new Set(viewedPages).size / lesson.pptPageCount) * 100)) : 0
+      const videoProgress = lesson.videoDuration > 0 ? Math.min(100, Math.round(((progress?.videoWatchedSeconds ?? 0) / lesson.videoDuration) * 100)) : 0
+      return {
+        lessonId: lesson.lessonId,
+        title: lesson.title,
+        description: lesson.description,
+        sortOrder: lesson.sortOrder,
+        pptUrl: lesson.pptUrl,
+        pptPageCount: lesson.pptPageCount,
+        videoUrl: lesson.videoUrl,
+        videoDuration: lesson.videoDuration,
+        passScore: lesson.passScore,
+        updatedAt: lesson.updatedAt,
+        progress: {
+          viewedPages: [...new Set(viewedPages)].sort((left, right) => left - right),
+          pptProgress,
+          pptCompleted: boolValue(progress?.pptCompleted),
+          videoProgress,
+          videoCompleted: boolValue(progress?.videoCompleted),
+          annotationCount: progress?.annotationCount ?? 0,
+        },
+      }
+    }),
     quiz: {
       latestScore: latestQuiz?.score ?? null,
       earnedHours: latestQuiz?.earnedHours ?? null,
       completedAt: latestQuiz?.completedAt ?? null,
-      passed: (latestQuiz?.score ?? 0) >= 60,
+      passed: (latestQuiz?.score ?? 0) >= (quizConfig?.passScore ?? 60),
+      published: Boolean(quizConfig),
+      title: quizConfig?.title ?? `${project.displayName} 章节测验`,
+      description: quizConfig?.description ?? null,
+      questionCount: quizConfig?.questionCount ?? 10,
+      passScore: quizConfig?.passScore ?? 60,
+      durationMinutes: quizConfig?.durationMinutes ?? 30,
     },
+    quizGate,
     discussions: {
       total: Number(discussionTotal?.count ?? 0),
-      list: discussions.map(d => ({
-        id: d.id,
-        title: d.title,
-        content: d.content,
-        tag: d.tag,
-        pinned: d.pinned,
-        replyCount: d.replyCount,
-        viewCount: d.viewCount,
-        createdAt: d.createdAt,
-        author: d.authorName,
+      list: discussions.map(discussion => ({
+        id: discussion.id,
+        title: discussion.title,
+        content: discussion.content,
+        tag: discussion.tag,
+        pinned: !!discussion.pinned,
+        replyCount: discussion.replyCount,
+        viewCount: discussion.viewCount,
+        createdAt: discussion.createdAt,
+        author: discussion.authorName,
       })),
     },
-    assignments: assignmentsResult,
-    studyMinutes: Math.round(studySeconds / 60),
+    assignments: assignments.map(assignment => {
+      const submission = submissionMap.get(assignment.id)
+      return {
+        id: assignment.id,
+        title: assignment.title,
+        description: assignment.description,
+        assignmentType: assignment.assignmentType,
+        maxScore: assignment.maxScore,
+        dueDate: assignment.dueDate,
+        createdAt: assignment.createdAt,
+        submitted: !!submission,
+        mySubmission: submission
+          ? {
+            id: submission.id,
+            score: submission.score,
+            content: submission.content,
+            feedback: submission.feedback,
+            submittedAt: submission.submittedAt,
+            gradedAt: submission.gradedAt,
+            graded: submission.score !== null,
+          }
+          : null,
+      }
+    }),
+    studyMinutes: Math.round((Number(studyAgg?.seconds) || 0) / 60),
   })
 }

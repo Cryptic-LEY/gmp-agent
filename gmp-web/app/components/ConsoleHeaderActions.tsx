@@ -1,6 +1,8 @@
 'use client'
 
+import Image from 'next/image'
 import { useEffect, useRef, useState, type CSSProperties } from 'react'
+import { createPortal } from 'react-dom'
 import {
   Bell,
   Check,
@@ -45,6 +47,7 @@ export interface ConsoleLayoutConfig {
 
 interface ConsoleHeaderActionsProps {
   displayName: string
+  avatarUrl?: string | null
   searchItems: ConsoleSearchItem[]
   notifications: ConsoleNotification[]
   onProfile: () => void
@@ -57,6 +60,11 @@ interface ConsoleHeaderActionsProps {
 
 const LAYOUT_STORAGE_KEY = 'gmp.console.layout.settings'
 const THEME_COLORS = ['#1d6f78', '#2563eb', '#7c3aed', '#dc2626', '#d97706']
+const MENU_MODES: Array<{ value: ConsoleMenuMode; label: string; title: string }> = [
+  { value: 'side', label: '侧边菜单', title: '侧边菜单' },
+  { value: 'top', label: '顶部菜单', title: '顶部菜单' },
+  { value: 'compact', label: '精简菜单', title: '精简菜单' },
+]
 const LAYOUT_TOGGLES: { label: string; key: ConsoleLayoutKey }[] = [
   { label: '开启 Tags-Views', key: 'showTagsView' },
   { label: '显示页签图标', key: 'showTabIcon' },
@@ -92,7 +100,9 @@ function mergeLayoutConfig(value: string | null): ConsoleLayoutConfig {
 
   try {
     const parsed = JSON.parse(value) as Partial<ConsoleLayoutConfig>
-    const menuMode: ConsoleMenuMode = DEFAULT_CONSOLE_LAYOUT.menuMode
+    const menuMode: ConsoleMenuMode = ['side', 'top', 'compact'].includes(parsed.menuMode as string)
+      ? parsed.menuMode as ConsoleMenuMode
+      : DEFAULT_CONSOLE_LAYOUT.menuMode
     const themeStyle: ConsoleThemeStyle = ['side-dark', 'top-dark'].includes(parsed.themeStyle as string)
       ? parsed.themeStyle as ConsoleThemeStyle
       : DEFAULT_CONSOLE_LAYOUT.themeStyle
@@ -148,6 +158,7 @@ const SECTION_TITLE: CSSProperties = {
 
 export default function ConsoleHeaderActions({
   displayName,
+  avatarUrl,
   searchItems,
   notifications,
   onProfile,
@@ -167,7 +178,7 @@ export default function ConsoleHeaderActions({
   const [notifs, setNotifs] = useState(() => notifications)
   const [layoutConfig, setLayoutConfig] = useState<ConsoleLayoutConfig>(() => cloneLayoutConfig())
   const bellRef = useRef<HTMLButtonElement>(null)
-  const avatarRef = useRef<HTMLDivElement>(null)
+  const avatarRef = useRef<HTMLButtonElement>(null)
   const [notifDropPos, setNotifDropPos] = useState({ top: 58, right: 220 })
   const [userMenuPos, setUserMenuPos] = useState({ top: 58, right: 20 })
 
@@ -209,8 +220,18 @@ export default function ConsoleHeaderActions({
   }, [isFullscreen, onFullscreenChange])
 
   useEffect(() => {
-    onLayoutChange?.({ ...layoutConfig, menuMode: DEFAULT_CONSOLE_LAYOUT.menuMode })
+    onLayoutChange?.(layoutConfig)
   }, [layoutConfig, onLayoutChange])
+
+  useEffect(() => {
+    if (!showLayoutPanel) return
+
+    const originalOverflow = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    return () => {
+      document.body.style.overflow = originalOverflow
+    }
+  }, [showLayoutPanel])
 
   useEffect(() => {
     if (layoutConfig.toggles.dynamicTitle) {
@@ -297,7 +318,7 @@ export default function ConsoleHeaderActions({
   }
 
   function saveLayoutConfig() {
-    localStorage.setItem(LAYOUT_STORAGE_KEY, JSON.stringify({ ...layoutConfig, menuMode: DEFAULT_CONSOLE_LAYOUT.menuMode }))
+    localStorage.setItem(LAYOUT_STORAGE_KEY, JSON.stringify(layoutConfig))
     setShowLayoutPanel(false)
   }
 
@@ -340,9 +361,13 @@ export default function ConsoleHeaderActions({
           <span style={{ fontSize: 11, letterSpacing: 0 }}>{lang === 'zh' ? 'CN' : 'EN'}</span>
         </button>
 
-        <div ref={avatarRef} onClick={openUserMenu} style={{ width: 28, height: 28, borderRadius: '50%', background: `linear-gradient(135deg,${themeColor},#35818a)`, display: 'flex', alignItems: 'center', justifyContent: 'center', marginLeft: 6, cursor: 'pointer', flexShrink: 0 }}>
-          <span style={{ color: '#fff', fontSize: 11, fontWeight: 700 }}>{displayName[0] || 'G'}</span>
-        </div>
+        <button type="button" ref={avatarRef} onClick={openUserMenu} aria-label="打开账号菜单" style={{ position: 'relative', overflow: 'hidden', width: 28, height: 28, padding: 0, border: 'none', borderRadius: '50%', background: `linear-gradient(135deg,${themeColor},#35818a)`, display: 'flex', alignItems: 'center', justifyContent: 'center', marginLeft: 6, cursor: 'pointer', flexShrink: 0 }}>
+          {avatarUrl ? (
+            <Image src={avatarUrl} alt={`${displayName}的头像`} fill unoptimized style={{ objectFit: 'cover' }} />
+          ) : (
+            <span style={{ color: '#fff', fontSize: 11, fontWeight: 700 }}>{displayName[0] || 'G'}</span>
+          )}
+        </button>
       </div>
 
       {isFullscreen && (
@@ -435,22 +460,66 @@ export default function ConsoleHeaderActions({
         </div>
       )}
 
-      {showLayoutPanel && (
+      {showLayoutPanel && typeof document !== 'undefined' && createPortal(
         <>
-          <div onClick={() => setShowLayoutPanel(false)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.3)', zIndex: 3000 }} />
-          <div style={{ position: 'fixed', top: 0, right: 0, height: '100%', width: 300, background: surfaceBg, color: bodyText, zIndex: 3001, boxShadow: '-4px 0 24px rgba(0,0,0,0.18)', borderLeft: `1px solid ${surfaceBorder}`, display: 'flex', flexDirection: 'column' }}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '16px 20px', borderBottom: `1px solid ${surfaceBorder}` }}>
-              <span style={{ fontWeight: 700, fontSize: 15, color: bodyText }}>布局设置</span>
-              <button onClick={() => setShowLayoutPanel(false)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: mutedText, padding: 4, display: 'flex' }}>
+          <div onClick={() => setShowLayoutPanel(false)} style={{ position: 'fixed', inset: 0, background: 'rgba(9, 21, 31, 0.36)', backdropFilter: 'blur(2px)', zIndex: 3000 }} />
+          <aside
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="console-layout-title"
+            style={{ position: 'fixed', top: 0, right: 0, bottom: 0, height: '100dvh', width: 'min(352px, 100vw)', background: surfaceBg, color: bodyText, zIndex: 3001, boxShadow: '-18px 0 44px rgba(9, 25, 38, 0.18)', borderLeft: `1px solid ${surfaceBorder}`, display: 'grid', gridTemplateRows: 'auto minmax(0, 1fr) auto' }}
+          >
+            <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', padding: '20px 20px 17px', borderBottom: `1px solid ${surfaceBorder}` }}>
+              <div>
+                <p style={{ margin: '0 0 5px', fontSize: 11, lineHeight: 1, fontWeight: 700, letterSpacing: '0.08em', color: themeColor }}>CONSOLE PREFERENCES</p>
+                <h2 id="console-layout-title" style={{ margin: 0, fontWeight: 800, fontSize: 18, lineHeight: 1.3, color: bodyText }}>布局设置</h2>
+              </div>
+              <button type="button" aria-label="关闭布局设置" onClick={() => setShowLayoutPanel(false)} style={{ background: surfaceSubtleBg, border: `1px solid ${surfaceBorder}`, borderRadius: controlRadius, cursor: 'pointer', color: mutedText, width: 32, height: 32, display: 'grid', placeItems: 'center' }}>
                 <X size={16} />
               </button>
             </div>
 
-            <div style={{ flex: 1, overflowY: 'auto', padding: '20px' }}>
+            <div style={{ minHeight: 0, overflowY: 'auto', padding: '20px' }}>
+              <p style={{ ...SECTION_TITLE, color: bodyText }}>菜单导航设置</p>
+              <div style={{ display: 'flex', gap: 10, marginBottom: 26, padding: 10, borderRadius: controlRadius + 4, background: surfaceSubtleBg, border: `1px solid ${surfaceBorder}` }}>
+                {MENU_MODES.map(mode => (
+                  <button
+                    key={mode.value}
+                    type="button"
+                    onClick={() => setLayoutConfig(prev => ({ ...prev, menuMode: mode.value }))}
+                    title={mode.title}
+                    aria-label={mode.label}
+                    style={{
+                      border: `2px solid ${layoutConfig.menuMode === mode.value ? themeColor : surfaceBorder}`,
+                      borderRadius: controlRadius,
+                      overflow: 'hidden',
+                      cursor: 'pointer',
+                      width: 88,
+                      height: 48,
+                      display: 'flex',
+                      flexShrink: 0,
+                      padding: 0,
+                      background: surfaceBg,
+                    }}
+                  >
+                    {mode.value !== 'top' && (
+                      <span style={{ width: mode.value === 'compact' ? 10 : 15, background: mode.value === 'compact' ? themeColor : '#1f2d3d' }} />
+                    )}
+                    <span style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
+                      {mode.value !== 'side' && <span style={{ height: 9, background: mode.value === 'top' ? themeColor : '#1f2d3d' }} />}
+                      <span style={{ flex: 1, display: 'grid', gap: 4, padding: 6, background: surfaceSubtleBg }}>
+                        <span style={{ height: 5, background: accentMedium, borderRadius: 999 }} />
+                        <span style={{ height: 5, background: layoutConfig.darkMode ? '#243246' : '#e0e8ec', borderRadius: 999 }} />
+                      </span>
+                    </span>
+                  </button>
+                ))}
+              </div>
+
               <p style={{ ...SECTION_TITLE, color: bodyText }}>主题风格设置</p>
-              <div style={{ display: 'flex', gap: 10, marginBottom: 24 }}>
+              <div style={{ display: 'flex', gap: 10, marginBottom: 24, padding: 10, borderRadius: controlRadius + 4, background: surfaceSubtleBg, border: `1px solid ${surfaceBorder}` }}>
                 {(['side-dark', 'top-dark'] as const).map(style => (
-                  <button key={style} type="button" onClick={() => setLayoutConfig(prev => ({ ...prev, themeStyle: style }))} title={style === 'side-dark' ? '暗色侧栏' : '暗色顶栏'} style={{ border: `2px solid ${layoutConfig.themeStyle === style ? themeColor : surfaceBorder}`, borderRadius: controlRadius, overflow: 'hidden', cursor: 'pointer', width: 52, height: 40, display: 'flex', flexShrink: 0, padding: 0, background: surfaceBg }}>
+                  <button key={style} type="button" onClick={() => setLayoutConfig(prev => ({ ...prev, themeStyle: style }))} title={style === 'side-dark' ? '暗色侧栏' : '暗色顶栏'} style={{ border: `2px solid ${layoutConfig.themeStyle === style ? themeColor : surfaceBorder}`, borderRadius: controlRadius, overflow: 'hidden', cursor: 'pointer', width: 92, height: 48, display: 'flex', flexShrink: 0, padding: 0, background: surfaceBg }}>
                     <span style={{ width: 12, background: style === 'side-dark' ? '#1f2d3d' : surfaceBg, borderRight: style === 'top-dark' ? `1px solid ${surfaceBorder}` : 'none' }} />
                     <span style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
                       <span style={{ height: 9, background: style === 'top-dark' ? '#1f2d3d' : layoutConfig.darkMode ? '#243246' : '#e0e8ec' }} />
@@ -495,16 +564,17 @@ export default function ConsoleHeaderActions({
               ))}
             </div>
 
-            <div style={{ padding: '16px 20px', borderTop: `1px solid ${surfaceBorder}`, display: 'flex', gap: 10 }}>
-              <button onClick={saveLayoutConfig} style={{ flex: 1, padding: '9px 0', borderRadius: controlRadius, background: themeColor, color: '#fff', border: 'none', cursor: 'pointer', fontSize: 13, fontWeight: 600 }}>
+            <div style={{ padding: '16px 20px 20px', borderTop: `1px solid ${surfaceBorder}`, display: 'flex', gap: 10, background: surfaceBg }}>
+              <button type="button" onClick={saveLayoutConfig} style={{ flex: 1, padding: '11px 0', borderRadius: controlRadius, background: themeColor, color: '#fff', border: 'none', cursor: 'pointer', fontSize: 13, fontWeight: 700 }}>
                 保存配置
               </button>
-              <button onClick={resetLayoutConfig} style={{ flex: 1, padding: '9px 0', borderRadius: controlRadius, background: 'transparent', color: mutedText, border: `1px solid ${surfaceBorder}`, cursor: 'pointer', fontSize: 13 }}>
+              <button type="button" onClick={resetLayoutConfig} style={{ flex: 1, padding: '11px 0', borderRadius: controlRadius, background: surfaceSubtleBg, color: mutedText, border: `1px solid ${surfaceBorder}`, cursor: 'pointer', fontSize: 13, fontWeight: 600 }}>
                 重置配置
               </button>
             </div>
-          </div>
-        </>
+          </aside>
+        </>,
+        document.body,
       )}
     </>
   )

@@ -13,19 +13,19 @@ export async function GET(req: NextRequest) {
   const { userId } = payload
 
   // ── 1. 总体统计 ─────────────────────────────────────────────────────────────
-  const overall = db.$client.prepare(`
+  const overall = await db.raw.get<{ total: number; correct: number }>(`
     SELECT COUNT(*) as total, SUM(is_correct) as correct
     FROM question_history WHERE user_id = ?
-  `).get(userId) as { total: number; correct: number }
+  `, [userId]) ?? { total: 0, correct: 0 }
 
   // ── 2. 游戏状态 ─────────────────────────────────────────────────────────────
-  const game = db.$client.prepare(`
+  const game = await db.raw.get<{ xp: number; points: number; rank_level: number; rank_title: string; streak_days: number; max_streak: number }>(`
     SELECT xp, points, rank_level, rank_title, streak_days, max_streak
     FROM user_game_state WHERE user_id = ?
-  `).get(userId) as { xp: number; points: number; rank_level: number; rank_title: string; streak_days: number; max_streak: number } | undefined
+  `, [userId])
 
   // ── 3. 按项目统计（最近答题） ─────────────────────────────────────────────
-  const byProject = db.$client.prepare(`
+  const byProject = await db.raw.all<{ project_name: string; total: number; correct: number }>(`
     SELECT q.project_name,
            COUNT(*) as total,
            SUM(qh.is_correct) as correct
@@ -34,65 +34,65 @@ export async function GET(req: NextRequest) {
     WHERE qh.user_id = ? AND q.project_name IS NOT NULL
     GROUP BY q.project_name
     ORDER BY total DESC
-  `).all(userId) as { project_name: string; total: number; correct: number }[]
+  `, [userId])
 
   // ── 4. 近 14 天每日答题数 ────────────────────────────────────────────────
-  const byDate = db.$client.prepare(`
-    SELECT substr(answered_at, 1, 10) as date,
+  const byDate = await db.raw.all<{ date: string; total: number; correct: number }>(`
+    SELECT date(answered_at) as date,
            COUNT(*) as total,
            SUM(is_correct) as correct
     FROM question_history
     WHERE user_id = ?
-      AND answered_at >= datetime('now', '-14 days')
+      AND answered_at >= date_sub(current_timestamp(3), interval 14 day)
     GROUP BY date
     ORDER BY date ASC
-  `).all(userId) as { date: string; total: number; correct: number }[]
+  `, [userId])
 
   // ── 5. 前测分数 ──────────────────────────────────────────────────────────
-  const latestPlan = db.$client.prepare(`
+  const latestPlan = await db.raw.get<{ score: number; edu_level: string; major: string; wrong_count: number; created_at: string }>(`
     SELECT score, edu_level, major, wrong_count, created_at
     FROM learning_plans
     WHERE user_id = ?
     ORDER BY created_at DESC
     LIMIT 1
-  `).get(userId) as { score: number; edu_level: string; major: string; wrong_count: number; created_at: string } | undefined
+  `, [userId])
 
   // ── 6. 仿真记录 ──────────────────────────────────────────────────────────
-  const simSessions = db.$client.prepare(`
+  const simSessions = await db.raw.all<{ product_name: string; dosage_category: string; score: number; max_score: number; completed_at: string }>(`
     SELECT product_name, dosage_category, score, max_score, completed_at
     FROM simulation_sessions
     WHERE user_id = ?
     ORDER BY completed_at DESC
     LIMIT 5
-  `).all(userId) as { product_name: string; dosage_category: string; score: number; max_score: number; completed_at: string }[]
+  `, [userId])
 
   // ── 7. 打卡天数 ──────────────────────────────────────────────────────────
-  const checkins = db.$client.prepare(`
+  const checkins = await db.raw.all<{ date: string }>(`
     SELECT date FROM checkin_log WHERE user_id = ? ORDER BY date DESC LIMIT 60
-  `).all(userId) as { date: string }[]
+  `, [userId])
 
   // ── 8. 近 14 天错题题型分布 ─────────────────────────────────────────────
-  const wrongByType = db.$client.prepare(`
+  const wrongByType = await db.raw.all<{ question_type: string; cnt: number }>(`
     SELECT q.question_type, COUNT(*) as cnt
     FROM question_history qh
     JOIN questions q ON q.question_id = qh.question_id
     WHERE qh.user_id = ? AND qh.is_correct = 0
     GROUP BY q.question_type
     ORDER BY cnt DESC
-  `).all(userId) as { question_type: string; cnt: number }[]
+  `, [userId])
 
   // ── 9. 知识点掌握度 — 薄弱点 Top 10 ───────────────────────────────────
-  const weakKps = db.$client.prepare(`
+  const weakKps = await db.raw.all<{ kp_id: string; confidence: number; attempt_count: number; correct_count: number; title: string | null }>(`
     SELECT km.kp_id, km.confidence, km.attempt_count, km.correct_count, kp.title
     FROM kp_mastery km
     LEFT JOIN knowledge_points kp ON kp.kp_id = km.kp_id
     WHERE km.user_id = ? AND km.attempt_count >= 1
     ORDER BY km.confidence ASC
     LIMIT 10
-  `).all(userId) as { kp_id: string; confidence: number; attempt_count: number; correct_count: number; title: string | null }[]
+  `, [userId])
 
   // ── 10. 知识点掌握度统计 ────────────────────────────────────────────────
-  const masteryStats = db.$client.prepare(`
+  const masteryStats = await db.raw.get<{ tested_kps: number; mastered: number; weak: number; avg_confidence: number }>(`
     SELECT
       COUNT(*) as tested_kps,
       SUM(CASE WHEN confidence >= 0.8 THEN 1 ELSE 0 END) as mastered,
@@ -100,7 +100,7 @@ export async function GET(req: NextRequest) {
       ROUND(AVG(confidence) * 100) as avg_confidence
     FROM kp_mastery
     WHERE user_id = ?
-  `).get(userId) as { tested_kps: number; mastered: number; weak: number; avg_confidence: number } | undefined
+  `, [userId])
 
   return NextResponse.json({
     overall: {

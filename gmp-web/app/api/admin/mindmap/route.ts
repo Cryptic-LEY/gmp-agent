@@ -37,8 +37,8 @@ export async function GET(req: NextRequest) {
   const page = Math.max(1, Number(searchParams.get('page') || 1))
   const pageSize = Math.max(1, Math.min(200, Number(searchParams.get('pageSize') || 50)))
 
-  const allRows = db.select().from(knowledgePoints).all()
-  const deps = db.select().from(kpDependencies).all()
+  const allRows = await db.select().from(knowledgePoints)
+  const deps = await db.select().from(kpDependencies)
   const depMap = new Map<string, { dependsOn: string[]; requiredFor: string[] }>()
 
   for (const dep of deps) {
@@ -105,7 +105,7 @@ export async function POST(req: NextRequest) {
 
     const kpId = `KP-${Date.now()}-${Math.random().toString(36).slice(2, 6).toUpperCase()}`
 
-    db.insert(knowledgePoints).values({
+    await db.insert(knowledgePoints).values({
       kpId,
       serialCode: textValue(body.serialCode) || null,
       granularity: textValue(body.granularity) || '点级',
@@ -121,7 +121,7 @@ export async function POST(req: NextRequest) {
       masteryRequirement: textValue(body.masteryRequirement) || null,
       status: textValue(body.status) || 'active',
       updatedAt: new Date().toISOString(),
-    }).run()
+    }).execute()
 
     return NextResponse.json({ success: true, kpId }, { status: 201 })
   } catch (err) {
@@ -165,7 +165,7 @@ export async function PUT(req: NextRequest) {
       return NextResponse.json({ error: '知识点名称不能为空' }, { status: 400 })
     }
 
-    db.update(knowledgePoints).set(updates).where(eq(knowledgePoints.kpId, kpId)).run()
+    await db.update(knowledgePoints).set(updates).where(eq(knowledgePoints.kpId, kpId)).execute()
     return NextResponse.json({ success: true })
   } catch (err) {
     console.error('update knowledge point failed', err)
@@ -186,10 +186,10 @@ export async function DELETE(req: NextRequest) {
   }
 
   try {
-    db.delete(kpDependencies)
+    await db.delete(kpDependencies)
       .where(or(eq(kpDependencies.fromKpId, kpId), eq(kpDependencies.toKpId, kpId)))
-      .run()
-    db.delete(knowledgePoints).where(eq(knowledgePoints.kpId, kpId)).run()
+      .execute()
+    await db.delete(knowledgePoints).where(eq(knowledgePoints.kpId, kpId)).execute()
     return NextResponse.json({ success: true })
   } catch (err) {
     console.error('delete knowledge point failed', err)

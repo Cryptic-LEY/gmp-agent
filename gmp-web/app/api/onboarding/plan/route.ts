@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { verifyToken } from '@/lib/auth'
 import { db } from '@/db'
 import { learningPlans } from '@/db/schema'
+import { buildPersonalizedScheme, safeParsePlan } from '@/lib/personalized-plan'
 import { eq, desc } from 'drizzle-orm'
 
 // GET /api/onboarding/plan
@@ -15,15 +16,17 @@ export async function GET(req: NextRequest) {
 
   const { userId } = payload
 
-  const latest = db.select().from(learningPlans)
+  const latest = (await db.select().from(learningPlans)
     .where(eq(learningPlans.userId, userId))
     .orderBy(desc(learningPlans.createdAt))
-    .limit(1)
-    .get()
+    .limit(1))[0]
 
   if (!latest) {
     return NextResponse.json({ hasplan: false })
   }
+
+  const plan = safeParsePlan(latest.planData)
+  const scheme = buildPersonalizedScheme(plan, latest.score)
 
   return NextResponse.json({
     hasplan: true,
@@ -32,7 +35,8 @@ export async function GET(req: NextRequest) {
     major: latest.major,
     score: latest.score,
     wrong_count: latest.wrongCount,
-    plan: JSON.parse(latest.planData),
+    plan,
+    personalized_scheme: scheme,
     created_at: latest.createdAt,
   })
 }

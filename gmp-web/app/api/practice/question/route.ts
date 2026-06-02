@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { verifyToken } from '@/lib/auth'
 import { db } from '@/db'
 import { knowledgePoints, questions } from '@/db/schema'
+import { buildDifficultiesByType } from '@/lib/practice-filters'
 import { eq } from 'drizzle-orm'
 
 interface KpMeta {
@@ -50,21 +51,22 @@ export async function GET(req: NextRequest) {
   const project = stripBlank(searchParams.get('project'))
   const kpId = stripBlank(searchParams.get('kpId'))
 
-  const kps = db.select({
+  const kps = await db.select({
     kpId: knowledgePoints.kpId,
     title: knowledgePoints.title,
     projectName: knowledgePoints.projectName,
     taskName: knowledgePoints.taskName,
-  }).from(knowledgePoints).all() as KpMeta[]
+  }).from(knowledgePoints) as KpMeta[]
 
   const kpById = new Map(kps.map(kp => [kp.kpId, kp]))
-  const rows = db.select().from(questions).where(eq(questions.status, 'active')).all()
+  const rows = await db.select().from(questions).where(eq(questions.status, 'active'))
 
   if (meta) {
     const activeKpIds = new Set(rows.map(question => question.kpId).filter((id): id is string => Boolean(id)))
     const activeKps = kps.filter(kp => activeKpIds.has(kp.kpId))
     const questionTypes = [...new Set(rows.map(question => question.questionType).filter(Boolean))]
     const difficulties = [...new Set(rows.map(question => question.difficulty).filter(Boolean))]
+    const difficultiesByType = buildDifficultiesByType(rows)
     const projects = [...new Set(
       rows
         .map(question => question.projectName || (question.kpId ? kpById.get(question.kpId)?.projectName : null))
@@ -82,7 +84,7 @@ export async function GET(req: NextRequest) {
         taskName: kp.taskName,
       }))
 
-    return NextResponse.json({ questionTypes, difficulties, projects, knowledgeItems })
+    return NextResponse.json({ questionTypes, difficulties, difficultiesByType, projects, knowledgeItems })
   }
 
   const filteredRows = rows.filter(question => {

@@ -1,6 +1,8 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import type { ChangeEvent } from 'react'
+import Image from 'next/image'
 import { useRouter } from 'next/navigation'
 import {
   User, Phone, Mail, Building2, Shield, Calendar,
@@ -31,6 +33,7 @@ interface UserProfile {
   studentId:   string | null
   idCard:      string | null
   phone:       string | null
+  avatarUrl:   string | null
 }
 
 interface BasicForm {
@@ -45,8 +48,39 @@ interface BasicForm {
   phone:       string
 }
 
+function resizeAvatar(file: File) {
+  return new Promise<string>((resolve, reject) => {
+    const source = URL.createObjectURL(file)
+    const picture = new window.Image()
+    picture.onload = () => {
+      const size = 256
+      const canvas = document.createElement('canvas')
+      const context = canvas.getContext('2d')
+      if (!context) {
+        URL.revokeObjectURL(source)
+        reject(new Error('Canvas unavailable'))
+        return
+      }
+      canvas.width = size
+      canvas.height = size
+      const sourceSize = Math.min(picture.width, picture.height)
+      const sourceX = (picture.width - sourceSize) / 2
+      const sourceY = (picture.height - sourceSize) / 2
+      context.drawImage(picture, sourceX, sourceY, sourceSize, sourceSize, 0, 0, size, size)
+      URL.revokeObjectURL(source)
+      resolve(canvas.toDataURL('image/webp', 0.84))
+    }
+    picture.onerror = () => {
+      URL.revokeObjectURL(source)
+      reject(new Error('Invalid image'))
+    }
+    picture.src = source
+  })
+}
+
 export default function ProfilePage() {
   const router = useRouter()
+  const avatarInputRef = useRef<HTMLInputElement>(null)
 
   const [profile, setProfile]     = useState<UserProfile | null>(null)
   const [activeTab, setActiveTab] = useState<Tab>('basic')
@@ -59,6 +93,8 @@ export default function ProfilePage() {
   const [saving, setSaving] = useState(false)
   const [saved, setSaved]   = useState(false)
   const [saveErr, setSaveErr] = useState('')
+  const [avatarSaving, setAvatarSaving] = useState(false)
+  const [avatarMsg, setAvatarMsg] = useState<{ ok: boolean; text: string } | null>(null)
 
   // 修改密码 form
   const [pwForm, setPwForm]   = useState({ old: '', newPw: '', confirm: '' })
@@ -86,6 +122,7 @@ export default function ProfilePage() {
           idCard:      data.idCard      ?? '',
           phone:       data.phone       ?? '',
         })
+        if (data.avatarUrl) localStorage.setItem('avatarUrl', data.avatarUrl)
       })
       .catch(() => {})
   }, [router])
@@ -115,6 +152,45 @@ export default function ProfilePage() {
       setProfile(p => p ? { ...p, ...form } : p)
     } finally {
       setSaving(false)
+    }
+  }
+
+  async function handleAvatarChange(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0]
+    event.target.value = ''
+    if (!file) return
+    if (!/^image\/(png|jpeg|webp)$/i.test(file.type)) {
+      setAvatarMsg({ ok: false, text: '请选择 PNG、JPG 或 WEBP 图片' })
+      return
+    }
+    if (file.size > 5 * 1024 * 1024) {
+      setAvatarMsg({ ok: false, text: '图片文件不能超过 5MB' })
+      return
+    }
+    const token = localStorage.getItem('token')
+    if (!token) return
+    setAvatarSaving(true)
+    setAvatarMsg(null)
+    try {
+      const avatarUrl = await resizeAvatar(file)
+      const response = await fetch('/api/user/profile', {
+        method: 'PATCH',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ avatarUrl }),
+      })
+      const data = await response.json()
+      if (!response.ok) {
+        setAvatarMsg({ ok: false, text: data.error ?? '头像保存失败' })
+        return
+      }
+      localStorage.setItem('avatarUrl', avatarUrl)
+      window.dispatchEvent(new Event('profile-avatar-updated'))
+      setProfile(current => current ? { ...current, avatarUrl } : current)
+      setAvatarMsg({ ok: true, text: '头像已更新，实训档案同步展示' })
+    } catch {
+      setAvatarMsg({ ok: false, text: '图片处理失败，请更换图片后重试' })
+    } finally {
+      setAvatarSaving(false)
     }
   }
 
@@ -206,14 +282,25 @@ export default function ProfilePage() {
         <div style={{ ...PANEL, padding: '24px 20px', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
           {/* Avatar */}
           <div style={{ position: 'relative', marginBottom: 12 }}>
-            <div style={{ width: 80, height: 80, borderRadius: '50%', background: 'linear-gradient(135deg,#215566,#35818a)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-              <span style={{ color: '#fff', fontSize: 28, fontWeight: 700 }}>
-                {(profile?.realName || profile?.displayName)?.[0] ?? '?'}
-              </span>
+            <div style={{ position: 'relative', overflow: 'hidden', width: 80, height: 80, borderRadius: '50%', background: 'linear-gradient(135deg,#215566,#35818a)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              {profile?.avatarUrl ? (
+                <Image src={profile.avatarUrl} alt="个人头像" fill unoptimized style={{ objectFit: 'cover' }} />
+              ) : (
+                <span style={{ color: '#fff', fontSize: 28, fontWeight: 700 }}>
+                  {(profile?.realName || profile?.displayName)?.[0] ?? '?'}
+                </span>
+              )}
             </div>
-            <div style={{ position: 'absolute', bottom: 0, right: 0, width: 24, height: 24, borderRadius: '50%', background: '#fff', border: '2px solid #e8eff2', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}>
+            <button
+              type="button"
+              onClick={() => avatarInputRef.current?.click()}
+              disabled={avatarSaving}
+              title="更换头像"
+              style={{ position: 'absolute', bottom: 0, right: 0, width: 24, height: 24, borderRadius: '50%', background: '#fff', border: '2px solid #e8eff2', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: avatarSaving ? 'wait' : 'pointer', padding: 0 }}
+            >
               <Camera size={12} color="#6b8a98" />
-            </div>
+            </button>
+            <input ref={avatarInputRef} type="file" accept="image/png,image/jpeg,image/webp" hidden onChange={handleAvatarChange} />
           </div>
 
           <p style={{ fontWeight: 700, fontSize: 15, color: '#183b4b', margin: '0 0 2px' }}>
@@ -222,6 +309,11 @@ export default function ProfilePage() {
           <p style={{ fontSize: 12, color: '#9ba8b0', margin: '0 0 20px' }}>
             {roleLabel[profile?.role ?? ''] ?? profile?.role ?? ''}
           </p>
+          {avatarMsg && (
+            <p style={{ width: '100%', margin: '0 0 14px', padding: '8px 10px', borderRadius: 6, color: avatarMsg.ok ? '#14765d' : '#c63f44', background: avatarMsg.ok ? '#e8f7f1' : '#fdeaea', fontSize: 11, lineHeight: 1.5 }}>
+              {avatarMsg.text}
+            </p>
+          )}
 
           {/* Info rows */}
           <div style={{ width: '100%', borderTop: '1px solid rgba(31,71,92,0.08)' }}>

@@ -7,7 +7,10 @@
     "dev:api": "cd ../gmp-api && uvicorn main:app --reload --port 8001",
     "dev:full": "concurrently --kill-others -n \"Web,API\" -c \"cyan,green\" \"next dev\" \"npm run dev:api\"",
     "build": "next build",
-    "start": "next start"
+    "start": "next start",
+    "db:seed-admin": "node scripts/seed-admin.js",
+    "db:mysql:schema": "node scripts/migrate-sqlite-to-mysql.js --create-schema --skip-data",
+    "db:mysql:migrate": "node scripts/migrate-sqlite-to-mysql.js --create-schema"
   },
   "dependencies": {
     "@ai-sdk/openai": "^3.0.53",
@@ -21,7 +24,10 @@
     "drizzle-orm": "^0.45.2",
     "echarts": "^6.1.0",
     "jsonwebtoken": "^9.0.3",
+    "jszip": "^3.10.1",
     "lucide-react": "^1.9.0",
+    "msedge-tts": "^2.0.5",
+    "mysql2": "^3.22.3",
     "next": "16.2.4",
     "react": "19.2.4",
     "react-dom": "19.2.4",

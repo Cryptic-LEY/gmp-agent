@@ -1,10 +1,35 @@
-import Database from 'better-sqlite3'
-import { drizzle } from 'drizzle-orm/better-sqlite3'
-import { migrate } from 'drizzle-orm/better-sqlite3/migrator'
+import fs from 'fs'
+import path from 'path'
+import mysql from 'mysql2/promise'
 
-const sqlite = new Database('./gmp.db')
-const db = drizzle(sqlite)
+function splitSqlStatements(sql: string) {
+  return sql
+    .split(/;\s*(?:\r?\n|$)/)
+    .map(statement => statement.trim())
+    .filter(statement => statement && !statement.startsWith('--'))
+}
 
-migrate(db, { migrationsFolder: './db/migrations' })
-console.log('Database initialized successfully')
-sqlite.close()
+async function main() {
+  const mysqlUrl = process.env.MYSQL_URL || process.env.DATABASE_URL
+  if (!mysqlUrl) {
+    throw new Error('Missing MYSQL_URL. Example: mysql://root:123456@127.0.0.1:3306/gmp')
+  }
+
+  const schemaPath = path.resolve(__dirname, 'mysql-schema.sql')
+  const statements = splitSqlStatements(fs.readFileSync(schemaPath, 'utf8'))
+  const connection = await mysql.createConnection(mysqlUrl)
+
+  try {
+    for (const statement of statements) {
+      await connection.query(statement)
+    }
+    console.log(`MySQL schema initialized successfully (${statements.length} statements)`)
+  } finally {
+    await connection.end()
+  }
+}
+
+main().catch(error => {
+  console.error(error)
+  process.exitCode = 1
+})

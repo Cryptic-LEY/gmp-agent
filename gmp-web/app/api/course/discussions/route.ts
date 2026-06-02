@@ -1,11 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { verifyToken } from '@/lib/auth'
+import { desc, eq } from 'drizzle-orm'
 import { db } from '@/db'
 import { courseDiscussions, users } from '@/db/schema'
-import { eq, desc, and } from 'drizzle-orm'
+import { verifyToken } from '@/lib/auth'
 
-// GET /api/course/discussions?trainingId=T01
-// 返回该章节讨论列表
+const VALID_TAGS = ['提问', '心得', '讨论', '答疑']
+
 export async function GET(req: NextRequest) {
   const token = req.headers.get('authorization')?.replace('Bearer ', '')
   if (!token) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
@@ -15,7 +15,7 @@ export async function GET(req: NextRequest) {
   const trainingId = searchParams.get('trainingId')
   if (!trainingId) return NextResponse.json({ error: 'trainingId required' }, { status: 400 })
 
-  const rows = db.select({
+  const rows = await db.select({
     id: courseDiscussions.id,
     title: courseDiscussions.title,
     content: courseDiscussions.content,
@@ -32,44 +32,44 @@ export async function GET(req: NextRequest) {
     .innerJoin(users, eq(courseDiscussions.userId, users.userId))
     .where(eq(courseDiscussions.trainingId, trainingId))
     .orderBy(desc(courseDiscussions.pinned), desc(courseDiscussions.createdAt))
-    .all()
 
   return NextResponse.json({ discussions: rows, total: rows.length })
 }
 
-// POST /api/course/discussions
-// body: { trainingId, title, content, tag? }
 export async function POST(req: NextRequest) {
   const token = req.headers.get('authorization')?.replace('Bearer ', '')
   if (!token) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+
   const payload = verifyToken(token)
   if (!payload) return NextResponse.json({ error: 'Invalid token' }, { status: 401 })
-  const { userId } = payload
 
   let body: { trainingId?: string; title?: string; content?: string; tag?: string }
-  try { body = await req.json() }
-  catch { return NextResponse.json({ error: '请求体格式错误' }, { status: 400 }) }
+  try {
+    body = await req.json()
+  } catch {
+    return NextResponse.json({ error: '请求体格式错误' }, { status: 400 })
+  }
 
-  const { trainingId, title, content, tag } = body
-  if (!trainingId || !title?.trim() || !content?.trim()) {
+  const title = body.title?.trim()
+  const content = body.content?.trim()
+  if (!body.trainingId || !title || !content) {
     return NextResponse.json({ error: '章节、标题、内容均不能为空' }, { status: 400 })
   }
-  if (!/^T(0[1-9]|1[01])$/.test(trainingId)) {
+  if (!/^T(0[1-9]|1[01])$/.test(body.trainingId)) {
     return NextResponse.json({ error: '无效的章节 ID' }, { status: 400 })
   }
 
-  const validTags = ['提问', '心得', '讨论', '答疑']
-  const finalTag = tag && validTags.includes(tag) ? tag : '提问'
-
-  const result = db.insert(courseDiscussions).values({
-    trainingId, userId,
-    title: title.trim(),
-    content: content.trim(),
-    tag: finalTag,
-  }).run()
+  const tag = body.tag && VALID_TAGS.includes(body.tag) ? body.tag : '提问'
+  const result = await db.raw.run(
+    `INSERT INTO course_discussions (training_id, user_id, title, content, tag) VALUES (?, ?, ?, ?, ?)`,
+    [body.trainingId, payload.userId, title, content, tag],
+  ) as { insertId?: number }
 
   return NextResponse.json({
-    id: Number(result.lastInsertRowid),
-    trainingId, title, content, tag: finalTag,
+    id: Number(result.insertId ?? 0),
+    trainingId: body.trainingId,
+    title,
+    content,
+    tag,
   })
 }

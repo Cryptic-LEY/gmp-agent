@@ -5,17 +5,17 @@ import { simulationSessions, questionHistory } from '@/db/schema'
 
 interface AnswerItem { question_id: string; answer: string }
 
-function upsertKpMastery(userId: string, kpId: string, isCorrect: boolean) {
+async function upsertKpMastery(userId: string, kpId: string, isCorrect: boolean) {
   const correct = isCorrect ? 1 : 0
-  db.$client.prepare(`
+  await db.raw.run(`
     INSERT INTO kp_mastery (user_id, kp_id, confidence, attempt_count, correct_count, last_tested_at)
-    VALUES (?, ?, ?, 1, ?, datetime('now'))
-    ON CONFLICT(user_id, kp_id) DO UPDATE SET
+    VALUES (?, ?, ?, 1, ?, CURRENT_TIMESTAMP(3))
+    ON DUPLICATE KEY UPDATE
       attempt_count  = attempt_count + 1,
       correct_count  = correct_count + ?,
-      confidence     = CAST(correct_count + ? AS REAL) / (attempt_count + 1),
-      last_tested_at = datetime('now')
-  `).run(userId, kpId, correct, correct, correct, correct)
+      confidence     = (correct_count + ?) / (attempt_count + 1),
+      last_tested_at = CURRENT_TIMESTAMP(3)
+  `, [userId, kpId, correct, correct, correct, correct])
 }
 
 // POST /api/simulation/submit
@@ -52,11 +52,11 @@ export async function POST(req: NextRequest) {
   let correct = 0
 
   for (const ans of answers) {
-    const q = db.$client.prepare(`
+    const q = await db.raw.get<Record<string, string | null>>(`
       SELECT question_id, kp_id, correct_answer, explanation, stem, question_type,
              option_a, option_b, option_c, option_d, option_e, option_f, option_g
       FROM questions WHERE question_id = ?
-    `).get(ans.question_id) as Record<string, string | null> | undefined
+    `, [ans.question_id])
 
     if (!q) continue
 
@@ -81,15 +81,15 @@ export async function POST(req: NextRequest) {
     })
 
     // 同步写入 question_history
-    db.insert(questionHistory).values({
+    await db.insert(questionHistory).values({
       userId, questionId: ans.question_id,
       userAnswer: ans.answer, isCorrect, reviewed: false,
-    }).run()
+    }).execute()
 
     // 更新知识点掌握度
     const kpId = (q as Record<string, string | null>).kp_id
     if (kpId) {
-      upsertKpMastery(userId, kpId, isCorrect)
+      await upsertKpMastery(userId, kpId, isCorrect)
     }
   }
 
@@ -97,14 +97,14 @@ export async function POST(req: NextRequest) {
   const score    = correct * 10
 
   // 保存仿真记录
-  db.insert(simulationSessions).values({
+  await db.insert(simulationSessions).values({
     userId,
     productName:    product_name,
     dosageCategory: dosage_category,
     score,
     maxScore,
     answers: JSON.stringify(records),
-  }).run()
+  }).execute()
 
   const pct   = records.length > 0 ? Math.round((correct / records.length) * 100) : 0
   const grade =

@@ -18,14 +18,13 @@ export async function GET(req: NextRequest) {
   start.setDate(start.getDate() - 111)
   const startStr = start.toISOString().slice(0, 10)
 
-  const logs = db.select({ date: checkinLog.date })
+  const logs = await db.select({ date: checkinLog.date })
     .from(checkinLog)
     .where(and(eq(checkinLog.userId, userId), gte(checkinLog.date, startStr)))
-    .all()
 
   const checkedDates = new Set(logs.map(l => l.date))
 
-  const state = db.select().from(userGameState).where(eq(userGameState.userId, userId)).get()
+  const state = (await db.select().from(userGameState).where(eq(userGameState.userId, userId)).limit(1))[0]
 
   return NextResponse.json({
     checkedDates: [...checkedDates],

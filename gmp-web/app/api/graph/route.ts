@@ -1,12 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { verifyToken } from '@/lib/auth'
-import Database from 'better-sqlite3'
-import path from 'path'
-
-const DB_PATH = path.join(process.cwd(), 'gmp.db')
+import { db } from '@/db'
 
 interface KpRow {
   kp_id: string
+  serial_code: string | null
   project_name: string
   task_name: string
   title: string
@@ -24,14 +22,11 @@ export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url)
   const type = searchParams.get('type') || 'knowledge'
 
-  const db = new Database(DB_PATH, { readonly: true })
-
-  try {
-    if (type === 'knowledge') {
-      const rows = db.prepare(
-        `SELECT kp_id, project_name, task_name, title, difficulty, point_type
-         FROM knowledge_points WHERE point_type='知识点' ORDER BY kp_id`
-      ).all() as KpRow[]
+  if (type === 'knowledge') {
+    const rows = await db.raw.all<KpRow>(
+      `SELECT kp_id, serial_code, project_name, task_name, title, difficulty, point_type
+       FROM knowledge_points WHERE point_type='知识点' ORDER BY kp_id`
+    )
 
       // Build category list (unique project names)
       const projectNames = [...new Set(rows.map(r => r.project_name))]
@@ -42,6 +37,7 @@ export async function GET(req: NextRequest) {
       const nodes = rows.map(r => ({
         id: r.kp_id,
         name: r.title,
+        serialCode: r.serial_code || '',
         category: categoryIndex[r.project_name],
         project: r.project_name,
         task: r.task_name,
@@ -62,14 +58,14 @@ export async function GET(req: NextRequest) {
         }
       }
 
-      return NextResponse.json({ nodes, edges, categories })
-    }
+    return NextResponse.json({ nodes, edges, categories })
+  }
 
-    if (type === 'ability') {
-      const rows = db.prepare(
-        `SELECT kp_id, project_name, task_name, title, difficulty, point_type
-         FROM knowledge_points WHERE point_type='技能点' ORDER BY kp_id`
-      ).all() as KpRow[]
+  if (type === 'ability') {
+    const rows = await db.raw.all<KpRow>(
+      `SELECT kp_id, serial_code, project_name, task_name, title, difficulty, point_type
+       FROM knowledge_points WHERE point_type='技能点' ORDER BY kp_id`
+    )
 
       const projectNames = [...new Set(rows.map(r => r.project_name))]
       const categories = projectNames.map(name => ({ name }))
@@ -78,6 +74,7 @@ export async function GET(req: NextRequest) {
       const nodes = rows.map(r => ({
         id: r.kp_id,
         name: r.title,
+        serialCode: r.serial_code || '',
         category: categoryIndex[r.project_name],
         project: r.project_name,
         task: r.task_name,
@@ -97,11 +94,8 @@ export async function GET(req: NextRequest) {
         }
       }
 
-      return NextResponse.json({ nodes, edges, categories })
-    }
-
-    return NextResponse.json({ nodes: [], edges: [], categories: [] })
-  } finally {
-    db.close()
+    return NextResponse.json({ nodes, edges, categories })
   }
+
+  return NextResponse.json({ nodes: [], edges: [], categories: [] })
 }
