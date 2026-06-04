@@ -134,5 +134,25 @@ CREATE TABLE IF NOT EXISTS course_final_tests (
   FOREIGN KEY (user_id) REFERENCES users(user_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+CREATE TABLE IF NOT EXISTS chat_messages (
+  id         INT AUTO_INCREMENT PRIMARY KEY,
+  user_id    VARCHAR(64) NOT NULL,
+  role       VARCHAR(16) NOT NULL,
+  content    TEXT NOT NULL,
+  sources    TEXT,
+  created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  FOREIGN KEY (user_id) REFERENCES users(user_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS feedback_log (
+  id              INT AUTO_INCREMENT PRIMARY KEY,
+  user_id         VARCHAR(64) NOT NULL,
+  message_role    VARCHAR(16) NOT NULL DEFAULT 'assistant',
+  message_content TEXT NOT NULL,
+  user_comment    TEXT,
+  created_at      DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  FOREIGN KEY (user_id) REFERENCES users(user_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 SELECT CONCAT('Total tables in gmp: ', COUNT(*)) AS result
 FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = 'gmp';

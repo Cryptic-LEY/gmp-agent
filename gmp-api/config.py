@@ -7,7 +7,12 @@ load_dotenv(Path(__file__).parent / ".env")
 
 BASE_DIR = Path(__file__).parent.parent
 
-DB_PATH = str(BASE_DIR / "gmp-web" / "gmp.db")
+# MySQL 连接（Python RAG 检索器）
+MYSQL_HOST     = os.getenv("MYSQL_HOST",     "localhost")
+MYSQL_PORT     = int(os.getenv("MYSQL_PORT", "3306"))
+MYSQL_USER     = os.getenv("MYSQL_USER",     "root")
+MYSQL_PASSWORD = os.getenv("MYSQL_PASSWORD", "")
+MYSQL_DATABASE = os.getenv("MYSQL_DATABASE", "gmp")
 
 # 统一使用通义千问（DashScope）——LLM和Embedding共用同一个Key和BaseURL
 DASHSCOPE_BASE_URL = os.getenv("DASHSCOPE_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1")

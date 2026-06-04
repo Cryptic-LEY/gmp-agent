@@ -20,6 +20,11 @@ import {
 } from 'lucide-react'
 import { buildPersonalizedScheme, compactProjectName, prioritySort, type PersonalizedScheme, type PlanItem } from '@/lib/personalized-plan'
 
+interface MasteryStats {
+  mastered: number; learning: number; weak: number; untested: number
+  total: number; masteryPct: number; hasMasteryData: boolean
+}
+
 interface PlanData {
   hasplan: boolean
   id?: number
@@ -30,6 +35,8 @@ interface PlanData {
   plan?: PlanItem[]
   personalized_scheme?: PersonalizedScheme
   created_at?: string
+  mastery_by_project?: Record<string, MasteryStats>
+  has_realtime_data?: boolean
 }
 
 const PRIORITY_CONFIG = {
@@ -329,7 +336,7 @@ export default function PlanPage() {
         </div>
         <div className="priority-columns">
           {(['high', 'medium', 'low'] as const).map(priority => (
-            <PriorityColumn key={priority} priority={priority} items={groupedPlan[priority]} />
+            <PriorityColumn key={priority} priority={priority} items={groupedPlan[priority]} masteryByProject={planData.mastery_by_project} />
           ))}
         </div>
       </section>
@@ -346,7 +353,11 @@ function MetricCard({ label, value, tone }: { label: string; value: string; tone
   )
 }
 
-function PriorityColumn({ priority, items }: { priority: PlanItem['priority']; items: PlanItem[] }) {
+function PriorityColumn({ priority, items, masteryByProject }: {
+  priority: PlanItem['priority']
+  items: PlanItem[]
+  masteryByProject?: Record<string, MasteryStats>
+}) {
   const config = PRIORITY_CONFIG[priority]
 
   return (
@@ -358,13 +369,27 @@ function PriorityColumn({ priority, items }: { priority: PlanItem['priority']; i
       <div className="priority-list">
         {items.length === 0 ? (
           <p className="empty-priority">暂无项目</p>
-        ) : items.map(item => (
+        ) : items.map(item => {
+          const mastery = masteryByProject?.[item.project_name]
+          return (
           <div key={item.project_name} className="priority-item">
             <strong>{compactProjectName(item.project_name)}</strong>
             <p>{item.reason}</p>
-            <small>{item.total > 0 ? `错 ${item.wrong} / 答 ${item.total}` : '前测未涉及'}</small>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginTop: 4 }}>
+              <small style={{ color: '#9ba8b0' }}>{item.total > 0 ? `前测：错 ${item.wrong} / 答 ${item.total}` : '前测未涉及'}</small>
+              {mastery?.hasMasteryData && (
+                <span style={{
+                  fontSize: 11, fontWeight: 700, padding: '1px 7px', borderRadius: 10,
+                  background: mastery.weak > 0 ? 'rgba(180,35,24,0.1)' : mastery.masteryPct >= 70 ? 'rgba(8,116,67,0.1)' : 'rgba(161,92,7,0.1)',
+                  color: mastery.weak > 0 ? '#b42318' : mastery.masteryPct >= 70 ? '#087443' : '#a15c07',
+                }}>
+                  {mastery.weak > 0 ? `${mastery.weak}个薄弱点` : `掌握度 ${mastery.masteryPct}%`}
+                </span>
+              )}
+            </div>
           </div>
-        ))}
+          )
+        })}
       </div>
     </article>
   )

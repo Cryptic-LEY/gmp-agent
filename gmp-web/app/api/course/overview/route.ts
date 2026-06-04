@@ -125,8 +125,35 @@ export async function GET(req: NextRequest) {
     .where(and(eq(courseStudyLogs.userId, userId), sql`${courseStudyLogs.loggedAt} >= ${weekAgo}`))
   const weekMinutes = Math.round((Number(weekStudy?.seconds) || 0) / 60)
 
+  // 实时推荐：基于 kp_mastery 的薄弱点打分，有数据时优先于静态前测方案
   let recommendations: { trainingId: string; displayName: string; reason: string }[] = []
-  if (latestPlan?.planData) {
+
+  if (masteryRows.length > 0) {
+    recommendations = chapters
+      .filter(c => c.status !== 'completed' && c.totalKps > 0)
+      .map(c => {
+        // 薄弱权重 3，未练习权重 1，进行中加 2 分鼓励继续
+        const urgency = c.weak * 3 + c.untested * 1 + (c.status === 'in_progress' ? 2 : 0)
+        let reason = ''
+        if (c.weak > 0 && c.untested > 0) {
+          reason = `有 ${c.weak} 个薄弱知识点、${c.untested} 个尚未练习`
+        } else if (c.weak > 0) {
+          reason = `有 ${c.weak} 个知识点掌握度偏低，建议重点复习`
+        } else if (c.untested > 0) {
+          reason = `有 ${c.untested} 个知识点尚未练习，赶快开始吧`
+        } else if (c.status === 'in_progress') {
+          reason = `学习进行中，当前掌握度 ${c.masteryPct}%`
+        }
+        return { trainingId: c.trainingId, displayName: c.displayName, reason, urgency }
+      })
+      .filter(c => c.reason)
+      .sort((a, b) => b.urgency - a.urgency)
+      .slice(0, 3)
+      .map(({ trainingId, displayName, reason }) => ({ trainingId, displayName, reason }))
+  }
+
+  // 无 kp_mastery 数据时（新用户）降级到静态前测方案
+  if (recommendations.length === 0 && latestPlan?.planData) {
     try {
       const planItems = JSON.parse(latestPlan.planData) as Array<{ project_name: string; priority: string; reason: string }>
       recommendations = planItems
@@ -138,16 +165,10 @@ export async function GET(req: NextRequest) {
             (project.kpProjUg && item.project_name.includes(project.kpProjUg)) ||
             (project.kpProjCol && item.project_name.includes(project.kpProjCol))
           )
-          return {
-            trainingId: matched?.trainingId ?? '',
-            displayName: matched?.displayName ?? item.project_name,
-            reason: item.reason,
-          }
+          return { trainingId: matched?.trainingId ?? '', displayName: matched?.displayName ?? item.project_name, reason: item.reason }
         })
         .filter(item => item.trainingId)
-    } catch {
-      recommendations = []
-    }
+    } catch { /* ignore */ }
   }
 
   return NextResponse.json({

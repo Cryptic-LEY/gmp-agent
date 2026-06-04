@@ -81,6 +81,13 @@ interface SubmitResult {
   } | null
   masteryConfidence?: number | null
   weakPointUpdated?: boolean
+  suggestedQuestions?: Array<{
+    questionId: string
+    stem: string
+    questionType: string
+    difficulty: string
+    options: { key: string; text: string }[]
+  }>
 }
 
 const QUESTION_TYPE_ORDER = ['单选题', '多选题', '判断题', '简答题', '案例分析题']
@@ -150,9 +157,16 @@ export default function PracticePage() {
   const [wrongRecords, setWrongRecords] = useState<Question[]>([])
   const [weakPoints, setWeakPoints] = useState<string[]>([])
 
+  // 今日复习模式状态
+  const [reviewQueue, setReviewQueue]   = useState<string[]>([])
+  const [reviewKpId, setReviewKpId]     = useState('')
+  const [reviewTotal, setReviewTotal]   = useState(0)
+  const [reviewDone, setReviewDone]     = useState(0)
+  const [reviewLoading, setReviewLoading] = useState(false)
+
   const buildQuestionUrl = useCallback(() => {
-    return buildPracticeQuestionUrl({ mode, questionType, difficulty, project, kpId })
-  }, [difficulty, kpId, mode, project, questionType])
+    return buildPracticeQuestionUrl({ mode, questionType, difficulty, project, kpId, reviewKpId })
+  }, [difficulty, kpId, mode, project, questionType, reviewKpId])
 
   const fetchQuestion = useCallback(async (currentToken: string) => {
     setLoading(true)
@@ -196,8 +210,50 @@ export default function PracticePage() {
   }, [router])
 
   useEffect(() => {
-    if (token) fetchQuestion(token)
+    if (token && mode !== 'review') fetchQuestion(token)
   }, [mode, questionType, difficulty, project, kpId, token, fetchQuestion])
+
+  // review 模式：reviewKpId 变化时拉题
+  useEffect(() => {
+    if (token && mode === 'review' && reviewKpId) fetchQuestion(token)
+  }, [reviewKpId]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  async function startReviewMode(currentToken: string) {
+    setReviewLoading(true)
+    try {
+      const res = await fetch('/api/practice/review-queue', { headers: { Authorization: `Bearer ${currentToken}` } })
+      const data = await res.json() as { kpIds: string[]; count: number; dueCount: number }
+      if (data.kpIds.length === 0) {
+        setMode('review')
+        setReviewQueue([])
+        setReviewTotal(0)
+        setReviewDone(0)
+        setReviewKpId('')
+        setQuestion(null)
+      } else {
+        const shuffled = [...data.kpIds].sort(() => Math.random() - 0.5)
+        setReviewQueue(shuffled)
+        setReviewTotal(data.count)
+        setReviewDone(0)
+        setReviewKpId(shuffled[0])
+        setMode('review')
+      }
+    } finally {
+      setReviewLoading(false)
+    }
+  }
+
+  function nextReviewKp() {
+    const nextDone = reviewDone + 1
+    setReviewDone(nextDone)
+    const remaining = reviewQueue.slice(nextDone)
+    if (remaining.length === 0) {
+      setReviewKpId('')
+      setQuestion(null)
+    } else {
+      setReviewKpId(remaining[Math.floor(Math.random() * remaining.length)])
+    }
+  }
 
   const visibleQuestionTypes = useMemo(() => sortQuestionTypes(meta.questionTypes), [meta.questionTypes])
   const visibleDifficulties = useMemo(() => {
@@ -370,6 +426,39 @@ export default function PracticePage() {
             等级提升：{result.newRankTitle}
           </p>
         )}
+
+        {result.suggestedQuestions && result.suggestedQuestions.length > 0 && (
+          <div style={{ marginTop: 14, paddingTop: 14, borderTop: '1px solid rgba(31,71,92,0.1)' }}>
+            <p style={{ fontSize: 12, fontWeight: 700, color: '#a15c07', margin: '0 0 10px', display: 'flex', alignItems: 'center', gap: 5 }}>
+              <AlertTriangle size={13} />
+              掌握度偏低，推荐继续练习相关题目
+            </p>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              {result.suggestedQuestions.map(sq => (
+                <div key={sq.questionId} style={{ padding: '10px 14px', borderRadius: 8, border: '1px solid rgba(161,92,7,0.2)', background: 'rgba(161,92,7,0.04)', display: 'flex', alignItems: 'flex-start', gap: 12 }}>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <span style={{ fontSize: 11, color: '#a15c07', fontWeight: 700, marginRight: 6 }}>{sq.questionType}</span>
+                    <span style={{ fontSize: 11, color: '#9ba8b0' }}>{sq.difficulty}</span>
+                    <p style={{ fontSize: 13, color: '#183b4b', margin: '4px 0 0', lineHeight: 1.6, overflow: 'hidden', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' }}>
+                      {sq.stem}
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => {
+                      setQuestion({ questionId: sq.questionId, stem: sq.stem, questionType: sq.questionType, difficulty: sq.difficulty, options: sq.options })
+                      setSelected([])
+                      setTextAnswer('')
+                      setResult(null)
+                    }}
+                    style={{ flexShrink: 0, padding: '6px 12px', borderRadius: 6, border: 'none', background: '#a15c07', color: '#fff', fontSize: 12, fontWeight: 700, cursor: 'pointer' }}
+                  >
+                    做这道题
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
     )
   }
@@ -486,6 +575,25 @@ export default function PracticePage() {
                   </span>
                 )}
               </div>
+
+              <div
+                onClick={() => { if (!reviewLoading) startReviewMode(token) }}
+                style={{ ...SPECIAL_CARD, ...(mode === 'review' ? ACTIVE_SPECIAL_CARD : {}), cursor: reviewLoading ? 'wait' : 'pointer' }}
+              >
+                <span style={SPECIAL_TITLE}>
+                  <LoaderCircle size={16} style={reviewLoading ? { animation: 'spin 1s linear infinite' } : {}} />
+                  今日复习
+                </span>
+                <span style={SPECIAL_DESC}>根据遗忘曲线，复习到期知识点</span>
+                {mode === 'review' && reviewTotal > 0 && (
+                  <div style={{ marginTop: 10, display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <div style={{ flex: 1, height: 4, borderRadius: 2, background: 'rgba(29,111,120,0.12)', overflow: 'hidden' }}>
+                      <div style={{ height: '100%', width: `${Math.round((reviewDone / reviewTotal) * 100)}%`, background: '#1d6f78', borderRadius: 2, transition: 'width 0.3s' }} />
+                    </div>
+                    <span style={{ fontSize: 12, color: '#1d6f78', fontWeight: 700, whiteSpace: 'nowrap' }}>{reviewDone}/{reviewTotal}</span>
+                  </div>
+                )}
+              </div>
             </div>
           </div>
         </div>
@@ -501,9 +609,23 @@ export default function PracticePage() {
             </div>
           )}
 
-          {!loading && !question && (
+          {!loading && !question && mode === 'review' && reviewTotal > 0 && (
+            <div style={{ ...PANEL, padding: 32, textAlign: 'center' }}>
+              <div style={{ fontSize: 40, marginBottom: 12 }}>🎉</div>
+              <p style={{ color: '#1d6f78', fontWeight: 700, fontSize: 18, margin: '0 0 8px' }}>今日复习完成！</p>
+              <p style={{ color: '#6b8a98', fontSize: 14, margin: '0 0 16px' }}>共复习了 {reviewTotal} 个知识点，坚持每天复习效果更好。</p>
+              <button onClick={() => { setMode('random'); setReviewTotal(0); setReviewDone(0); fetchQuestion(token) }}
+                style={{ padding: '10px 22px', borderRadius: 8, border: 'none', background: '#1d6f78', color: '#fff', fontSize: 14, fontWeight: 700, cursor: 'pointer' }}>
+                继续随机练习
+              </button>
+            </div>
+          )}
+
+          {!loading && !question && !(mode === 'review' && reviewTotal > 0) && (
             <div style={{ ...PANEL, padding: 28, color: '#6b8a98', textAlign: 'center' }}>
-              当前条件下暂无题目，请切换练习模式或筛选条件。
+              {mode === 'review' && reviewTotal === 0
+                ? '当前暂无待复习的知识点，继续学习后再来检验吧！'
+                : '当前条件下暂无题目，请切换练习模式或筛选条件。'}
             </div>
           )}
 
@@ -553,8 +675,11 @@ export default function PracticePage() {
                   {submitting && question && isSubjective(question.questionType) ? 'AI 批改中...' : submitting ? '提交中...' : '提交答案'}
                 </button>
               ) : (
-                <button onClick={() => fetchQuestion(token)} style={{ padding: 13, borderRadius: 8, border: 'none', fontSize: 14, fontWeight: 700, cursor: 'pointer', background: 'linear-gradient(135deg,#1d6f78,#35818a)', color: '#fff' }}>
-                  下一题
+                <button
+                  onClick={() => { mode === 'review' ? nextReviewKp() : fetchQuestion(token) }}
+                  style={{ padding: 13, borderRadius: 8, border: 'none', fontSize: 14, fontWeight: 700, cursor: 'pointer', background: 'linear-gradient(135deg,#1d6f78,#35818a)', color: '#fff' }}
+                >
+                  {mode === 'review' ? `下一个复习点 (${reviewTotal - reviewDone - 1} 剩余)` : '下一题'}
                 </button>
               )}
             </div>

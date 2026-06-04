@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { verifyToken } from '@/lib/auth'
 import { db } from '@/db'
 import { knowledgePoints, kpMastery, questionHistory, questions, userGameState } from '@/db/schema'
-import { and, eq } from 'drizzle-orm'
+import { and, eq, ne, inArray, isNotNull, sql } from 'drizzle-orm'
 import { getRankByXp, XP_REWARDS } from '@/lib/gamification'
 
 interface AiGrade {
@@ -163,6 +163,53 @@ async function handlePracticeSubmit(req: NextRequest) {
     }
   }
 
+  // 答题后推荐：掌握度低于 70 分时推 2 道同 KP 或同项目题目
+  let suggestedQuestions: Array<{
+    questionId: string; stem: string; questionType: string; difficulty: string
+    options: { key: string; text: string }[]
+  }> = []
+
+  if (weakPointUpdated && question.kpId) {
+    const OBJECTIVE_TYPES = ['单选题', '多选题', '判断题']
+    // 过滤脏数据：非判断题必须有 optionA 和 optionB
+    const cleanFilter = sql`(${questions.questionType} = '判断题' OR (${questions.optionA} IS NOT NULL AND ${questions.optionA} != '' AND ${questions.optionB} IS NOT NULL AND ${questions.optionB} != ''))`
+
+    const candidates = await db.select().from(questions)
+      .where(and(
+        ne(questions.questionId, questionId),
+        eq(questions.kpId, question.kpId),
+        eq(questions.status, 'active'),
+        inArray(questions.questionType, OBJECTIVE_TYPES),
+        cleanFilter,
+      ))
+      .limit(4)
+
+    // 不够则从同项目补
+    let pool = candidates
+    if (pool.length < 2 && question.projectName) {
+      const extra = await db.select().from(questions)
+        .where(and(
+          ne(questions.questionId, questionId),
+          eq(questions.projectName, question.projectName),
+          eq(questions.status, 'active'),
+          inArray(questions.questionType, OBJECTIVE_TYPES),
+          cleanFilter,
+        ))
+        .limit(4)
+      const existingIds = new Set(pool.map(q => q.questionId))
+      pool = [...pool, ...extra.filter(q => !existingIds.has(q.questionId))]
+    }
+
+    suggestedQuestions = pool.slice(0, 2).map(q => {
+      const optionKeys = ['A', 'B', 'C', 'D', 'E', 'F', 'G'] as const
+      const optionValues = [q.optionA, q.optionB, q.optionC, q.optionD, q.optionE, q.optionF, q.optionG]
+      const options = q.questionType === '判断题'
+        ? [{ key: 'A', text: '对' }, { key: 'B', text: '错' }]
+        : optionKeys.map((k, i) => ({ key: k, text: optionValues[i] ?? '' })).filter(o => o.text)
+      return { questionId: q.questionId, stem: q.stem, questionType: q.questionType, difficulty: q.difficulty, options }
+    })
+  }
+
   return NextResponse.json({
     correct,
     pendingReview: subjective && !aiGrade,
@@ -181,6 +228,7 @@ async function handlePracticeSubmit(req: NextRequest) {
     } : null,
     masteryConfidence,
     weakPointUpdated,
+    suggestedQuestions,
     xpGained,
     newXp,
     leveledUp,
