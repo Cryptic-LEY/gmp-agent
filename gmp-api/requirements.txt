@@ -5,3 +5,4 @@ httpx==0.27.2
 python-dotenv==1.0.1
 langchain-core==0.3.0
 langgraph==0.2.0
+pymysql==2.2.8

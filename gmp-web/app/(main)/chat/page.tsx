@@ -27,10 +27,10 @@ const PANEL: React.CSSProperties = {
 
 export default function ChatPage() {
   const router = useRouter()
+  const WELCOME: Message = { role: 'assistant', content: '你好！我是GMP学习助手，可以帮你解答关于《药品生产质量管理规范》的任何问题。请问有什么需要了解的？' }
+
   const [token, setToken] = useState('')
-  const [messages, setMessages] = useState<Message[]>([
-    { role: 'assistant', content: '你好！我是GMP学习助手，可以帮你解答关于《药品生产质量管理规范》的任何问题。请问有什么需要了解的？' },
-  ])
+  const [messages, setMessages] = useState<Message[]>([WELCOME])
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
   const [eduLevel, setEduLevel] = useState<string | null>(null)
@@ -42,10 +42,22 @@ export default function ChatPage() {
     const tok = localStorage.getItem('token')
     if (!tok) { router.push('/login'); return }
     setToken(tok)
-  }, [router])
+    // 加载历史对话
+    fetch('/api/agent/chat/history', { headers: { Authorization: `Bearer ${tok}` } })
+      .then(r => r.ok ? r.json() : null)
+      .then((data: { messages: Message[] } | null) => {
+        if (data?.messages?.length) {
+          setMessages([WELCOME, ...data.messages])
+        }
+      })
+      .catch(() => {})
+  }, [router]) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
+    // 仅在发送新消息后滚动到底部，初始进入页面不自动滚动
+    if (messages.length > 1) {
+      bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
+    }
   }, [messages, loading])
 
   async function handleSend() {
@@ -55,6 +67,7 @@ export default function ChatPage() {
     setMessages(prev => [...prev, { role: 'user', content: q }, { role: 'assistant', content: '' }])
     setInput('')
     setLoading(true)
+    let streamCompleted = false   // 只有流式正常结束才持久化
 
     try {
       const history = messages.slice(-6).map(m => ({ role: m.role, content: m.content }))
@@ -89,6 +102,7 @@ export default function ChatPage() {
               setMessages(prev => { const m = [...prev]; m[m.length - 1] = { ...m[m.length - 1], content: m[m.length - 1].content + evt.chunk }; return m })
             } else if (evt.done) {
               setMessages(prev => { const m = [...prev]; m[m.length - 1] = { ...m[m.length - 1], sources: evt.sources, criticTriggered: evt.critic_triggered }; return m })
+              streamCompleted = true
             }
           } catch { /* ignore */ }
         }
@@ -97,6 +111,21 @@ export default function ChatPage() {
       setMessages(prev => { const m = [...prev]; m[m.length - 1] = { role: 'assistant', content: 'AI服务暂时不可用，请检查后端是否启动。' }; return m })
     } finally {
       setLoading(false)
+      // 只在流式正常完成时持久化，错误消息不存库
+      if (streamCompleted) {
+        setMessages(prev => {
+          const last = prev[prev.length - 1]
+          if (last?.role === 'assistant' && last.content) {
+            const userMsg = prev[prev.length - 2]
+            if (userMsg?.role === 'user') {
+              const headers = { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }
+              fetch('/api/agent/chat/history', { method: 'POST', headers, body: JSON.stringify({ role: 'user', content: userMsg.content }) }).catch(() => {})
+              fetch('/api/agent/chat/history', { method: 'POST', headers, body: JSON.stringify({ role: 'assistant', content: last.content, sources: last.sources }) }).catch(() => {})
+            }
+          }
+          return prev
+        })
+      }
     }
   }
 
@@ -185,6 +214,23 @@ export default function ChatPage() {
                       <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 999, background: 'rgba(200,129,43,0.09)', color: '#c8812b', border: '1px solid rgba(200,129,43,0.2)' }}>已校验</span>
                     )}
                   </div>
+                )}
+                {msg.role === 'assistant' && msg.content && !loading && i > 0 && !msg.content.startsWith('AI服务暂时不可用') && (
+                  <button
+                    onClick={() => {
+                      const comment = window.prompt('请简单描述哪里有误（可选）：')
+                      if (comment === null) return  // 点取消不上报
+                      fetch('/api/agent/chat/feedback', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+                        body: JSON.stringify({ messageContent: msg.content, userComment: comment || undefined }),
+                      }).catch(() => {})
+                      window.alert('感谢反馈！我们会持续改进。')
+                    }}
+                    style={{ fontSize: 11, color: '#9ba8b0', background: 'none', border: '1px solid rgba(31,71,92,0.12)', borderRadius: 6, padding: '2px 8px', cursor: 'pointer', alignSelf: 'flex-start' }}
+                  >
+                    答案有误？
+                  </button>
                 )}
               </div>
             </div>

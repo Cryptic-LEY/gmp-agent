@@ -70,10 +70,10 @@ const SEARCH_ITEMS = [
 ]
 
 const NOTIFICATIONS = [
-  { id: 1, icon: '🎉', title: '连续打卡奖励', desc: '每日打卡自动累计 XP，连续达成里程碑可获得额外奖励', time: '规则', read: true },
-  { id: 2, icon: '📚', title: '课程内容更新', desc: '第七章「确认与验证」已更新新内容',        time: '1小时前', read: false },
-  { id: 3, icon: '⚠️', title: '每日练习提醒', desc: '今日每日练习尚未完成，快去挑战吧！',     time: '3小时前', read: true  },
-  { id: 4, icon: '🏆', title: '等级提升',     desc: '恭喜达到新等级：GMP 见习员',             time: '昨天',  read: true  },
+  { id: 1, icon: '🎉', title: '连续打卡奖励', desc: '每日打卡自动累计 XP，连续达成里程碑可获得额外奖励', time: '规则',   read: true,  href: '/streak'   },
+  { id: 2, icon: '📚', title: '课程内容更新', desc: '第七章「确认与验证」已更新新内容',                   time: '1小时前', read: false, href: '/course'   },
+  { id: 3, icon: '⚠️', title: '每日练习提醒', desc: '今日每日练习尚未完成，快去挑战吧！',               time: '3小时前', read: false, href: '/practice' },
+  { id: 4, icon: '🏆', title: '等级提升',     desc: '恭喜达到新等级：GMP 见习员',                       time: '昨天',   read: true,  href: '/report'   },
 ]
 
 type LayoutKey = 'showTagsView' | 'showTabIcon' | 'fixedHeader' | 'showLogo' | 'dynamicTitle'
@@ -231,6 +231,26 @@ export default function MainLayout({ children }: { children: React.ReactNode }) 
           time: '刚刚',
           read: false,
         }, ...previous.filter(item => item.id !== 1)])
+      })
+      .catch(() => {})
+    // 今日复习通知：检查遗忘曲线到期 KP 数
+    fetch('/api/practice/review-queue', { headers: { Authorization: `Bearer ${token}` } })
+      .then(r => r.ok ? r.json() : null)
+      .then(data => {
+        if (!data || data.count === 0) return
+        setNotifs(previous => {
+          // 去掉旧的复习提醒（id=3），换成实时的
+          const filtered = previous.filter(n => n.id !== 3)
+          return [...filtered, {
+            id: 3,
+            icon: '📖',
+            title: '今日复习提醒',
+            desc: `有 ${data.count} 个知识点根据遗忘曲线建议今天复习（其中 ${data.dueCount} 个已到期）`,
+            time: '刚刚',
+            read: false,
+            href: '/practice',
+          }]
+        })
       })
       .catch(() => {})
     fetch('/api/user/profile', { headers: { Authorization: `Bearer ${token}` } })
@@ -451,8 +471,8 @@ export default function MainLayout({ children }: { children: React.ReactNode }) 
               height: 64, display: 'flex', alignItems: 'center', justifyContent: sidebarCollapsed ? 'center' : 'flex-start',
               padding: sidebarCollapsed ? '0 12px' : '0 20px', gap: 12, borderBottom: `1px solid ${sidebarBorder}`, flexShrink: 0,
             }}>
-              <div style={{ width: 34, height: 34, borderRadius: controlRadius, background: `linear-gradient(135deg,${themeColor},#45a29e)`, boxShadow: `0 10px 22px ${hexToRgba(themeColor, 0.26)}`, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-                <span style={{ color: '#fff', fontWeight: 800, fontSize: 14 }}>G</span>
+              <div style={{ width: 34, height: 34, borderRadius: controlRadius, overflow: 'hidden', boxShadow: `0 10px 22px ${hexToRgba(themeColor, 0.26)}`, flexShrink: 0 }}>
+                <img src="/gmp-logo.png" alt="GMP" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
               </div>
               {!sidebarCollapsed && (
                 <div>
@@ -531,13 +551,13 @@ export default function MainLayout({ children }: { children: React.ReactNode }) 
             background: headerBg, borderBottom: `1px solid ${surfaceBorder}`,
             backdropFilter: 'blur(18px)', boxShadow: headerDark ? '0 10px 28px rgba(0,0,0,0.16)' : '0 12px 28px rgba(31,71,92,0.07)',
           }}>
-            <button style={headerIconButtonStyle}>
+            <button style={headerIconButtonStyle} onClick={() => selectMenuMode(sidebarCollapsed ? 'side' : 'compact')} title={sidebarCollapsed ? '展开侧边栏' : '收起侧边栏'}>
               <Menu size={18} />
             </button>
 
             {topMenuMode && layoutConfig.toggles.showLogo && (
               <Link href="/dashboard" style={{ display: 'flex', alignItems: 'center', gap: 8, color: headerText, textDecoration: 'none', fontWeight: 700, fontSize: 13, flexShrink: 0 }}>
-                <span style={{ width: 28, height: 28, borderRadius: controlRadius, background: `linear-gradient(135deg,${themeColor},#35818a)`, color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800 }}>G</span>
+                <img src="/gmp-logo.png" alt="GMP" style={{ width: 28, height: 28, borderRadius: controlRadius, objectFit: 'cover' }} />
                 GMP 助学平台
               </Link>
             )}
@@ -686,7 +706,16 @@ export default function MainLayout({ children }: { children: React.ReactNode }) 
             </button>
           </div>
           {notifs.map(n => (
-            <div key={n.id} style={{ display: 'flex', gap: 12, padding: '12px 16px', borderBottom: '1px solid rgba(31,71,92,0.05)', background: n.read ? 'transparent' : 'rgba(29,111,120,0.04)' }}>
+            <div key={n.id}
+              onClick={() => {
+                setNotifs(prev => prev.map(x => x.id === n.id ? { ...x, read: true } : x))
+                setShowNotif(false)
+                if (n.href) router.push(n.href)
+              }}
+              style={{ display: 'flex', gap: 12, padding: '12px 16px', borderBottom: '1px solid rgba(31,71,92,0.05)', background: n.read ? 'transparent' : 'rgba(29,111,120,0.04)', cursor: 'pointer', transition: 'background 0.15s' }}
+              onMouseEnter={e => (e.currentTarget.style.background = 'rgba(29,111,120,0.07)')}
+              onMouseLeave={e => (e.currentTarget.style.background = n.read ? 'transparent' : 'rgba(29,111,120,0.04)')}
+            >
               <span style={{ fontSize: 18, lineHeight: '20px', flexShrink: 0 }}>{n.icon}</span>
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 2 }}>
@@ -698,8 +727,11 @@ export default function MainLayout({ children }: { children: React.ReactNode }) 
               {!n.read && <div style={{ width: 6, height: 6, borderRadius: '50%', background: '#1d6f78', flexShrink: 0, marginTop: 6 }} />}
             </div>
           ))}
-          <div style={{ padding: '10px 16px', textAlign: 'center' }}>
-            <span style={{ fontSize: 12, color: '#1d6f78', cursor: 'pointer' }}>查看全部通知</span>
+          <div style={{ padding: '10px 16px', textAlign: 'center', borderTop: '1px solid rgba(31,71,92,0.06)' }}>
+            <button onClick={() => { setShowNotif(false); router.push('/report') }}
+              style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 12, color: '#1d6f78', fontWeight: 500 }}>
+              查看全部通知 →
+            </button>
           </div>
         </div>
       )}

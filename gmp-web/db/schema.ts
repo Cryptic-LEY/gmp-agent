@@ -396,3 +396,23 @@ export const courseFinalTests = mysqlTable('course_final_tests', {
   classHourScore: double('class_hour_score').notNull().default(0),
   completedAt: datetime('completed_at', { mode: 'string', fsp: 3 }).notNull().default(now),
 })
+
+// ── AI 对话持久化 ────────────────────────────────────────────────────────────
+
+export const chatMessages = mysqlTable('chat_messages', {
+  id:        int('id').autoincrement().primaryKey(),
+  userId:    varchar('user_id', { length: 64 }).notNull().references(() => users.userId),
+  role:      varchar('role', { length: 16 }).notNull(),   // 'user' | 'assistant'
+  content:   text('content').notNull(),
+  sources:   text('sources'),                              // JSON array
+  createdAt: datetime('created_at', { mode: 'string', fsp: 3 }).notNull().default(now),
+})
+
+export const feedbackLog = mysqlTable('feedback_log', {
+  id:             int('id').autoincrement().primaryKey(),
+  userId:         varchar('user_id', { length: 64 }).notNull().references(() => users.userId),
+  messageRole:    varchar('message_role', { length: 16 }).notNull().default('assistant'),
+  messageContent: text('message_content').notNull(),
+  userComment:    text('user_comment'),
+  createdAt:      datetime('created_at', { mode: 'string', fsp: 3 }).notNull().default(now),
+})

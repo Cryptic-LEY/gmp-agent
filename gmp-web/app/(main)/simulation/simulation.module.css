@@ -571,7 +571,7 @@
 }
 
 .mapArtboard {
-  --map-edge-feather: clamp(34px, 4.8dvh, 76px);
+  --map-edge-feather: 0px;
   position: absolute;
   z-index: 1;
   top: 50%;
