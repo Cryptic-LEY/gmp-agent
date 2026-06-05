@@ -56,7 +56,7 @@ export async function GET(
     authorRole: users.role,
   })
     .from(courseDiscussionReplies)
-    .innerJoin(users, eq(courseDiscussionReplies.userId, users.userId))
+    .leftJoin(users, eq(courseDiscussionReplies.userId, users.userId))
     .where(eq(courseDiscussionReplies.discussionId, discussionId))
     .orderBy(asc(courseDiscussionReplies.createdAt))
 

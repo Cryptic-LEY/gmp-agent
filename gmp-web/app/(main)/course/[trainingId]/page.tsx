@@ -283,6 +283,7 @@ export default function ChapterDetailPage({ params }: { params: Promise<{ traini
           { id: 'classroom',  label: '课程学习', icon: PlayCircle,     badge: data.courseware?.length || null },
           { id: 'quiz',       label: '章节测验', icon: ClipboardCheck, badge: quiz.latestScore !== null ? `${quiz.latestScore}分` : null },
           { id: 'assignment', label: '作业',     icon: Edit3,          badge: assignments.length > 0 ? assignments.length : null },
+          { id: 'discussion', label: '讨论',     icon: MessageSquare,  badge: discussions.total > 0 ? discussions.total : null },
           { id: 'resources',  label: '法规资料', icon: FileText,       badge: totalResources },
         ] as const).map(({ id, label, icon: Icon, badge }) => {
           const active = tab === id
@@ -323,6 +324,7 @@ export default function ChapterDetailPage({ params }: { params: Promise<{ traini
         {tab === 'classroom'  && <LearningStudioTab trainingId={trainingId} data={data} chapter={chapter} courseware={data.courseware ?? []} discussions={discussions.list} setTab={setTab} onChange={loadData} />}
         {tab === 'quiz'       && <QuizTab trainingId={trainingId} quiz={quiz} gate={data.quizGate} eduLevel={chapter.eduLevel} setTab={setTab} />}
         {tab === 'assignment' && <AssignmentTab assignments={assignments} onChange={loadData} />}
+        {tab === 'discussion' && <DiscussionTab trainingId={trainingId} discussions={discussions.list} onChange={loadData} />}
         {tab === 'resources'  && <ResourcesTab resources={resources} />}
       </div>
     </div>

@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { verifyToken } from '@/lib/auth'
 import { db } from '@/db'
 import { knowledgePoints, kpMastery, questionHistory, questions, userGameState } from '@/db/schema'
-import { and, eq } from 'drizzle-orm'
+import { and, eq, inArray, ne } from 'drizzle-orm'
 import { getRankByXp, XP_REWARDS } from '@/lib/gamification'
 
 interface AiGrade {
@@ -163,6 +163,73 @@ async function handlePracticeSubmit(req: NextRequest) {
     }
   }
 
+  // ── Practice Agent：答题后推荐最弱KP的相关题目 ──────────────────────────
+  let suggestedQuestions: Array<{
+    questionId: string; stem: string; questionType: string
+    difficulty: string; options: { key: string; text: string }[]
+  }> = []
+
+  if (weakPointUpdated && kp?.projectName && question.kpId) {
+    try {
+      // 同项目其他KP
+      const projectKps = await db.select({ kpId: knowledgePoints.kpId })
+        .from(knowledgePoints)
+        .where(and(
+          eq(knowledgePoints.projectName, kp.projectName),
+          ne(knowledgePoints.kpId, question.kpId),
+        ))
+
+      if (projectKps.length > 0) {
+        const projectKpIds = projectKps.map(k => k.kpId)
+
+        // 用户对这些KP的掌握度
+        const masteryData = await db.select({ kpId: kpMastery.kpId, confidence: kpMastery.confidence })
+          .from(kpMastery)
+          .where(and(eq(kpMastery.userId, userId), inArray(kpMastery.kpId, projectKpIds)))
+
+        const masteryMap = new Map(masteryData.map(m => [m.kpId, m.confidence]))
+
+        // 排序：未练过(-1) < 掌握度低的
+        const sorted = [...projectKpIds].sort((a, b) => {
+          const ca = masteryMap.has(a) ? (masteryMap.get(a) ?? 0) : -1
+          const cb = masteryMap.has(b) ? (masteryMap.get(b) ?? 0) : -1
+          return ca - cb
+        })
+
+        const weakestKpId = sorted[0]
+
+        // 找该KP的题目，随机取1道
+        const candidates = await db.select().from(questions)
+          .where(and(eq(questions.kpId, weakestKpId), eq(questions.status, 'active')))
+          .limit(10)
+
+        if (candidates.length > 0) {
+          const picked = candidates[Math.floor(Math.random() * candidates.length)]
+          const weakKpInfo = projectKps.find(p => p.kpId === weakestKpId)
+          const weakMastery = masteryMap.get(weakestKpId)
+
+          const optionKeys = ['A','B','C','D','E','F','G'] as const
+          const optFields = [picked.optionA, picked.optionB, picked.optionC, picked.optionD, picked.optionE, picked.optionF, picked.optionG]
+          const opts = picked.questionType === '判断题'
+            ? [{ key: 'A', text: '对' }, { key: 'B', text: '错' }]
+            : optionKeys.map((k, i) => ({ key: k, text: optFields[i] ?? '' })).filter(o => o.text)
+
+          suggestedQuestions = [{
+            questionId: picked.questionId,
+            stem: picked.stem,
+            questionType: picked.questionType,
+            difficulty: picked.difficulty,
+            options: opts,
+            // 额外信息供前端展示
+            ...({ weakKpId: weakestKpId, weakMastery: weakMastery ?? null } as object),
+          }]
+        }
+      }
+    } catch {
+      // 推荐失败不影响主流程
+    }
+  }
+
   return NextResponse.json({
     correct,
     pendingReview: subjective && !aiGrade,
@@ -181,6 +248,7 @@ async function handlePracticeSubmit(req: NextRequest) {
     } : null,
     masteryConfidence,
     weakPointUpdated,
+    suggestedQuestions,
     xpGained,
     newXp,
     leveledUp,
