@@ -70,7 +70,6 @@ export async function GET(req: NextRequest) {
     const projects = [...new Set(
       rows
         .map(question => question.projectName || (question.kpId ? kpById.get(question.kpId)?.projectName : null))
-        .concat(activeKps.map(kp => kp.projectName))
         .filter((value): value is string => Boolean(value))
     )].sort((left, right) => left.localeCompare(right, 'zh-Hans-CN'))
     const knowledgeItems = activeKps

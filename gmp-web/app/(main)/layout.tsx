@@ -6,7 +6,7 @@ import Link from 'next/link'
 import Image from 'next/image'
 import {
   Gauge, BookOpen, Flame, MessageSquare, Sparkles, Network,
-  Building2, BarChart3, LogOut,
+  Building2, BarChart3, LogOut, ShoppingBag,
   Menu, Search, Bell, HelpCircle, Maximize, Minimize2, ChevronRight, X,
   GraduationCap, Globe, User, Settings2, Check,
 } from 'lucide-react'
@@ -34,8 +34,9 @@ const NAV = [
   {
     group: '进阶功能',
     items: [
-      { label: '实训仿真', icon: Building2, href: '/simulation' },
-      { label: '成绩报告', icon: BarChart3, href: '/report'     },
+      { label: '实训仿真', icon: Building2,   href: '/simulation' },
+      { label: '成绩报告', icon: BarChart3,   href: '/report'     },
+      { label: '积分商店', icon: ShoppingBag, href: '/shop'       },
     ],
   },
 ]

@@ -1,10 +1,54 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { desc, eq } from 'drizzle-orm'
+import { desc, eq, sql } from 'drizzle-orm'
 import { db } from '@/db'
-import { courseDiscussions, users } from '@/db/schema'
+import { courseDiscussions, trainingProjects, users } from '@/db/schema'
 import { verifyToken } from '@/lib/auth'
 
 const VALID_TAGS = ['提问', '心得', '讨论', '答疑']
+const AI_USER_ID = 'ai-assistant'
+
+// 触发 AI 自动答疑（fire-and-forget，不阻塞主响应）
+async function triggerAiReply(discussionId: number, title: string, content: string, trainingId: string) {
+  try {
+    // 拼上章节背景
+    const [chapter] = await db.select({ displayName: trainingProjects.displayName })
+      .from(trainingProjects)
+      .where(eq(trainingProjects.trainingId, trainingId))
+      .limit(1)
+    const chapterName = chapter?.displayName ?? trainingId
+
+    const question = [
+      `【GMP课程 · ${chapterName} 章节讨论】`,
+      `学生提问标题：${title}`,
+      `问题详情：${content}`,
+      '请结合 GMP 法规和课程知识点，给出清晰、准确的解答。如果涉及具体条款，请引用原文。',
+    ].join('\n')
+
+    const resp = await fetch('http://localhost:8001/chat/tutor', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ question }),
+      signal: AbortSignal.timeout(30_000),
+    })
+    if (!resp.ok) return
+
+    const data = await resp.json() as { answer?: string }
+    const answer = data.answer?.trim()
+    if (!answer) return
+
+    // 写入 AI 回复
+    await db.raw.run(
+      `INSERT INTO course_discussion_replies (discussion_id, user_id, content, is_ai) VALUES (?, ?, ?, 1)`,
+      [discussionId, AI_USER_ID, answer],
+    )
+    // 更新回复数
+    await db.update(courseDiscussions)
+      .set({ replyCount: sql`${courseDiscussions.replyCount} + 1` })
+      .where(eq(courseDiscussions.id, discussionId))
+  } catch {
+    // AI 答疑失败不影响学生发帖
+  }
+}
 
 export async function GET(req: NextRequest) {
   const token = req.headers.get('authorization')?.replace('Bearer ', '')
@@ -65,8 +109,15 @@ export async function POST(req: NextRequest) {
     [body.trainingId, payload.userId, title, content, tag],
   ) as { insertId?: number }
 
+  const discussionId = Number(result.insertId ?? 0)
+
+  // 「提问」和「答疑」标签自动触发 AI 答疑（不等待，不影响响应速度）
+  if (tag === '提问' || tag === '答疑') {
+    void triggerAiReply(discussionId, title, content, body.trainingId)
+  }
+
   return NextResponse.json({
-    id: Number(result.insertId ?? 0),
+    id: discussionId,
     trainingId: body.trainingId,
     title,
     content,
