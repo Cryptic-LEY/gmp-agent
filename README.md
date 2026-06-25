@@ -14,7 +14,8 @@
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.115-009688?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
 [![LangGraph](https://img.shields.io/badge/LangGraph-Agentic_RAG-FF6B35)](https://langchain-ai.github.io/langgraph/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
-[![MySQL](https://img.shields.io/badge/MySQL-9.6-4479A1?logo=mysql&logoColor=white)](https://www.mysql.com/)
+[![MySQL](https://img.shields.io/badge/MySQL-9.x-4479A1?logo=mysql&logoColor=white)](https://www.mysql.com/)
+[![Tests](https://img.shields.io/badge/Tests-230_passing-22c55e)](./gmp-api)
 [![License](https://img.shields.io/badge/License-MIT-22c55e)](LICENSE)
 
 <br/>
@@ -30,7 +31,7 @@
 
 China's **Good Manufacturing Practice (GMP)** regulation is the backbone of pharmaceutical quality management — and one of the hardest subjects to teach effectively.
 
-This platform transforms **real GMP inspection findings** from Zhejiang Province (2022–2025) into interactive learning: knowledge graphs, AI tutoring, simulation exams, course modules with discussion forums, and a gamified progression system — all tailored to the student's major and dosage-form track. Teachers and admins get a dedicated portal to manage courses, assignments, and analytics.
+This platform transforms **real GMP inspection findings** from Zhejiang Province (2022–2025) into interactive learning: knowledge graphs, AI tutoring with tool-calling, simulation exams, course modules with discussion forums, and a gamified progression system — all tailored to the student's major and dosage-form track. Teachers and admins get a dedicated portal to manage courses, assignments, and analytics.
 
 ---
 
@@ -40,8 +41,8 @@ This platform transforms **real GMP inspection findings** from Zhejiang Province
 <tr>
 <td width="50%">
 
-**🤖 Agentic RAG Tutor**
-LangGraph `retrieve → generate → critique → respond` pipeline. Hybrid MySQL FULLTEXT + vector retrieval. Every answer cites the exact GMP clause. Conversations are **persisted** — pick up where you left off. "Wrong answer" reports feed back directly into the evaluation dataset.
+**🤖 Enterprise-Grade RAG Agent**
+LangGraph `retrieve → generate → critique → respond` pipeline with full **Function Calling** (7-step FC loop, 6 built-in tools). HNSW + BM25 hybrid retrieval, gte-rerank cross-encoder, small-to-big chunking. Every answer cites the exact GMP clause. Hard constraint protection ensures negations ("不得"/"禁止") are never dropped by compression. Conversations are **persisted** — pick up where you left off.
 
 </td>
 <td width="50%">
@@ -95,8 +96,32 @@ Teachers publish assignments, view class analytics, browse the question bank, an
 ┌──────────────────▼───────────────────────────┐
 │               gmp-api  (Backend)              │
 │  FastAPI · LangGraph · pymysql                │
-│  MySQL FULLTEXT + cosine vector retrieval     │
-│  Qwen3-max  (DashScope OpenAI-compat.)        │
+│                                               │
+│  ┌─────────────────────────────────────────┐ │
+│  │           Four-Layer Memory             │ │
+│  │  user profile · summary · working mem   │ │
+│  └─────────────────────────────────────────┘ │
+│                                               │
+│  ┌─────────────────────────────────────────┐ │
+│  │         RAG Pipeline (Spec 01-02)        │ │
+│  │  Semantic Cache → HNSW + BM25 Hybrid    │ │
+│  │  gte-rerank → Hard Constraint Guard     │ │
+│  │  Token Compression → Head-Tail Reorder  │ │
+│  └─────────────────────────────────────────┘ │
+│                                               │
+│  ┌─────────────────────────────────────────┐ │
+│  │      Agent & Tool Loop (Spec 05-06)     │ │
+│  │  7-step FC loop · 6 tools · Loop Guard  │ │
+│  │  HITL gate · MCP Server (default off)   │ │
+│  └─────────────────────────────────────────┘ │
+│                                               │
+│  ┌─────────────────────────────────────────┐ │
+│  │       Evaluation Loop (Spec 04/07)      │ │
+│  │  RAGAS 3-dim · SelfCheckGPT · CoVe      │ │
+│  │  35-item golden set · error book        │ │
+│  └─────────────────────────────────────────┘ │
+│                                               │
+│  Qwen3-max + qwen-turbo  (DashScope)          │
 └──────────────────────────────────────────────┘
                    │  shared
 ┌──────────────────▼───────────────────────────┐
@@ -108,12 +133,15 @@ Teachers publish assignments, view class analytics, browse the question bank, an
 **Tutor Agent pipeline**
 
 ```
-question → [retrieve]  MySQL FULLTEXT + cosine vector + KP graph hop
-         → [generate]  Qwen3-max
-         → [critique]  hallucination / faithfulness check
-         → [respond]   answer + GMP clause citations  (SSE stream)
-         → [persist]   chat_messages table  →  shown on next load
-         → [feedback]  "wrong answer" → feedback_log  →  eval dataset
+question → [semantic cache]  hit → return in <100ms
+         → [retrieve]   HNSW + BM25 hybrid → gte-rerank → small-to-big
+         → [compress]   hard constraint protection + token compression
+         → [generate]   Qwen3-max
+         → [critique]   hallucination check + CoVe online correction
+         → [tool loop]  FC 7-step if action intent detected (Guard: max 8 steps)
+         → [respond]    answer + GMP clause citations  (SSE stream)
+         → [persist]    chat_messages → shown on next load
+         → [feedback]   "wrong answer" → error_book → few-shot injection
 ```
 
 ---
@@ -130,6 +158,7 @@ question → [retrieve]  MySQL FULLTEXT + cosine vector + KP graph hop
 | Skill points (extracted from defect template docs) | **590** |
 | Skill → KP links (3-tier confidence) | **24,145** |
 | Training projects (simulation scenarios) | **11** |
+| RAGAS golden set (evaluation) | **35** |
 
 ---
 
@@ -155,7 +184,7 @@ git clone https://github.com/Cryptic-LEY/gmp-agent.git
 cd gmp-agent
 
 # 2. Database — run the DDL against your MySQL instance
-mysql -u root -p gmp < gmp-web/db/migrate-new-tables.sql
+mysql -u root gmp < gmp-web/db/migrations-mysql/0000_init_mysql.sql
 
 # 3. Frontend
 cd gmp-web
@@ -183,7 +212,7 @@ gmp-agent/
 │   │   ├── (main)/
 │   │   │   ├── dashboard/          # Hero stats, knowledge graph, streaks
 │   │   │   ├── course/             # 11-chapter course module
-│   │   │   │   └── [trainingId]/   # Chapter detail: tabs for quiz, sim, discussion, assignments
+│   │   │   │   └── [trainingId]/   # Chapter detail: quiz, sim, discussion, assignments
 │   │   │   ├── chat/               # AI tutor (persistent, with feedback)
 │   │   │   ├── practice/           # Daily adaptive quiz (5 modes)
 │   │   │   ├── simulation/         # RPG-style case exam (map, boss, wallet)
@@ -198,12 +227,30 @@ gmp-agent/
 │       └── migrations-mysql/       # Full MySQL DDL history
 │
 ├── gmp-api/                        # FastAPI + LangGraph backend
-│   ├── agents/tutor.py             # LangGraph Tutor Agent
+│   ├── agents/
+│   │   ├── tutor.py                # LangGraph Tutor Agent + CoVe
+│   │   ├── tool_agent.py           # 7-step Function Calling loop
+│   │   ├── guard.py                # Loop guard (steps + tokens + repeat detection)
+│   │   ├── hitl.py                 # Human-in-the-loop approval gate
+│   │   ├── router.py               # Large/small model routing
+│   │   └── limits.py               # MAX_REASONING_STEPS soft cap
 │   ├── rag/
-│   │   ├── retriever.py            # MySQL FULLTEXT + vector hybrid
-│   │   └── embedder.py             # text-embedding-v3 batch generation
-│   ├── logger.py                   # Query log → MySQL
-│   └── config.py                   # Model, RAG & MySQL parameters
+│   │   ├── retriever.py            # HNSW + BM25 hybrid retrieval
+│   │   ├── vector_index.py         # In-process HNSW index (faiss)
+│   │   ├── embedder.py             # text-embedding-v3 batch generation
+│   │   ├── reranker.py             # gte-rerank cross-encoder
+│   │   ├── chunker.py              # Small-to-big chunking (300/1800 chars)
+│   │   ├── compressor.py           # Hard constraint protection + token compression
+│   │   └── hyde.py                 # HyDE (default off)
+│   ├── tools/                      # Tool framework (base, registry, validation, runtime)
+│   │   └── builtin/                # 6 built-in tools (search, profile, learning, content)
+│   ├── memory/                     # Four-layer memory (profile, summary, experience)
+│   ├── cache/                      # Semantic cache (cosine similarity LRU)
+│   ├── eval/                       # RAGAS eval, SelfCheckGPT, golden set, error book
+│   ├── mcp/                        # MCP Server (Tools/Resources/Prompts, default off)
+│   ├── migrations/                 # MySQL migration SQL files
+│   ├── main.py                     # FastAPI entry: /chat/tutor, /chat/agent, /chat/feedback
+│   └── config.py                   # All tunable parameters (22 new configs)
 │
 └── SETUP.md
 ```
@@ -216,10 +263,14 @@ gmp-agent/
 |-------|-------------|
 | Frontend | Next.js 15, React 19, TypeScript, Tailwind CSS, Radix UI, ECharts |
 | Backend | FastAPI, LangGraph, Python 3.11 |
-| AI / LLM | Qwen3-max (DashScope), `text-embedding-v3` |
-| Retrieval | MySQL FULLTEXT (BM25) + cosine vector search + KP graph hop |
+| AI / LLM | Qwen3-max + qwen-turbo (DashScope), `text-embedding-v3`, `gte-rerank` |
+| Retrieval | In-process HNSW (faiss) + MySQL FULLTEXT (BM25) + gte-rerank + KP graph hop |
+| Memory | Four-layer: user profile card · recursive summary · working memory · experience recall |
+| Evaluation | RAGAS (CP/FF/AR) · SelfCheckGPT · CoVe · 35-item golden set · error book |
+| Agent | 7-step FC loop · 6 tools · loop guard · HITL · MCP Server |
 | Database | MySQL 9.x, Drizzle ORM (mysql2) |
 | Auth | JWT (jose) + bcrypt |
+| Tests | 230 pytest tests (all passing, zero paid-API dependencies) |
 
 ---
 
