@@ -1,0 +1,135 @@
+Simulation audio assets
+
+Impact Sounds, Interface Sounds, Music Jingles, and RPG Audio by Kenney:
+https://kenney.nl/assets/impact-sounds
+https://kenney.nl/assets/interface-sounds
+https://kenney.nl/assets/music-jingles
+https://kenney.nl/assets/rpg-audio
+
+Current RPG Audio combat files copied into this project:
+kenney-swing-1.ogg, kenney-swing-2.ogg, kenney-heavy-chop.ogg,
+kenney-draw-1.ogg, kenney-draw-3.ogg, kenney-armor-hit-1.ogg,
+kenney-armor-hit-2.ogg, kenney-armor-hit-3.ogg, kenney-cloth-hit.ogg,
+kenney-cloth-1.ogg, kenney-entry-step.ogg
+
+License: Creative Commons Zero (CC0 1.0)
+https://creativecommons.org/publicdomain/zero/1.0/
+
+Background music:
+8-Bit Battle Loop by Wolfgang_ / Theodore Kerr
+https://opengameart.org/content/8-bit-battle-loop
+
+License: Creative Commons Zero (CC0 1.0)
+https://creativecommons.org/publicdomain/zero/1.0/
+
+Generated local SFX:
+attack-shadow-1.wav, attack-shadow-2.wav, heavy-shadow-1.wav
+
+Generated procedurally for this project.
+
+GamerSounds audio files:
+gamersounds-sword-1.mp3, gamersounds-sword-2.mp3,
+gamersounds-hit-impact.mp3, gamersounds-fireball.mp3,
+gamersounds-magic-cast.mp3, gamersounds-door.wav,
+gamersounds-monster-roar.wav, gamersounds-monster-death.mp3,
+gamersounds-correct.mp3, gamersounds-wrong.mp3,
+gamersounds-pickup-key.mp3, gamersounds-glass-break.mp3
+
+Source:
+https://gamersounds.com/library/
+
+Usage notice from source site:
+The source site states that resources are for personal learning and
+communication only and must not be used for commercial purposes.
+
+GameSounds.xyz / Kenney Sound Pack active replacement set:
+gs-music-chapter-1.ogg, gs-music-chapter-2.ogg,
+gs-music-chapter-3.ogg, gs-music-chapter-4.ogg,
+gs-music-chapter-5.ogg, gs-music-chapter-6.ogg,
+gs-music-default.ogg,
+gs-ui-start.ogg, gs-attack-swing-1.ogg, gs-attack-swing-2.ogg,
+gs-heavy-chop.ogg, gs-heavy-metal.ogg,
+gs-ranged-laser-1.ogg, gs-ranged-laser-2.ogg,
+gs-enemy-laser-1.ogg, gs-enemy-laser-2.ogg,
+gs-enemy-attack.ogg, gs-boss-attack.ogg,
+gs-hit-metal-1.ogg, gs-hit-metal-2.ogg,
+gs-enemy-death-1.ogg, gs-enemy-death-2.ogg,
+gs-quiz.ogg, gs-correct-1.ogg, gs-correct-2.ogg,
+gs-wrong-1.ogg, gs-wrong-2.ogg,
+gs-player-hit-1.ogg, gs-player-hit-2.ogg,
+gs-pickup.ogg, gs-roll-1.ogg, gs-roll-2.ogg,
+gs-dodge-1.ogg, gs-dodge-2.ogg,
+gs-item-1.ogg, gs-item-2.ogg,
+gs-inventory-open.ogg, gs-inventory-close.ogg,
+gs-projectile-break-1.ogg, gs-projectile-break-2.ogg,
+gs-door-open-1.ogg, gs-door-open-2.ogg,
+gs-entry-step.ogg, gs-entry-ready.ogg
+
+Source:
+https://gamesounds.xyz/?dir=Kenney%27s+Sound+Pack
+
+Original creator:
+Kenney
+https://kenney.nl/
+
+License: Creative Commons Zero (CC0 1.0)
+https://creativecommons.org/publicdomain/zero/1.0/
+
+OpenGameArt CC0 simulation audio additions:
+oga-sci-heavy-core-1.ogg, oga-sci-heavy-core-2.ogg,
+oga-sci-blade-1.ogg, oga-sci-blade-2.ogg,
+oga-sci-laser-1.ogg, oga-sci-laser-2.ogg,
+oga-sci-enemy-laser-1.ogg, oga-sci-enemy-laser-2.ogg,
+oga-sci-impact-1.ogg, oga-sci-impact-2.ogg,
+oga-sci-boss-pulse-1.ogg, oga-sci-boss-pulse-2.ogg,
+oga-sci-alert-1.ogg, oga-sci-alert-2.ogg,
+oga-sci-break-1.ogg, oga-sci-break-2.ogg
+
+Source:
+60 CC0 Sci-Fi SFX
+https://opengameart.org/content/60-cc0-sci-fi-sfx
+
+oga-hall-factory-ambiance.ogg
+Source:
+Factory Ambiance
+https://opengameart.org/content/factory-ambiance
+
+oga-music-claimed-by-the-void.ogg
+Source:
+Claimed by the Void
+https://opengameart.org/content/claimed-by-the-void
+
+oga-music-pressure.ogg
+Source:
+Pressure
+https://opengameart.org/content/pressure
+
+oga-music-fast-fight-looped.ogg
+Source:
+Fast fight / battle music (looped)
+https://opengameart.org/content/fast-fight-battle-music-looped
+
+game-hammer-1.ogg, game-hammer-2.ogg,
+game-metal-hit-1.ogg, game-metal-hit-2.ogg, game-metal-hit-3.ogg,
+game-metal-slam-1.ogg, game-metal-collapse-1.ogg
+Source:
+100 CC0 metal and wood SFX
+https://opengameart.org/content/100-cc0-metal-and-wood-sfx
+
+game-body-hit-1.ogg, game-body-hit-2.ogg,
+game-armor-hit-1.ogg, game-armor-hit-2.ogg, game-armor-hit-3.ogg,
+game-break-heavy-1.ogg, game-break-heavy-2.ogg,
+game-rock-hit-1.ogg
+Source:
+75 CC0 breaking / falling / hit sfx
+https://opengameart.org/content/75-cc0-breaking-falling-hit-sfx
+
+game-metal-ping-1.ogg, game-metal-ping-2.ogg,
+game-fast-hit-1.ogg, game-fast-hit-2.ogg,
+game-power-down-1.ogg, game-boss-thunder-1.ogg
+Source:
+100 CC0 SFX #2
+https://opengameart.org/content/100-cc0-sfx-2
+
+License: Creative Commons Zero (CC0 1.0)
+https://creativecommons.org/publicdomain/zero/1.0/

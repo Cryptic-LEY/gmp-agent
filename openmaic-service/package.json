@@ -1,0 +1,16 @@
+{
+  "name": "openmaic-service",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node src/server.mjs",
+    "start": "node src/server.mjs"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "pptxgenjs": "^4.0.1"
+  }
+}
