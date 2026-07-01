@@ -2,7 +2,7 @@
 D4 SelfCheckGPT：同问多次采样，算答案间语义一致性。
 一致性分低 → 疑似瞎编（模型在不同采样中自相矛盾）。
 
-consistency_score 使用词级 Jaccard 相似度——轻量且无需 DashScope。
+consistency_score 使用字符 bigram Jaccard 相似度——中文友好且无需分词器。
 生产环境采样调 DashScope；测试时注入 llm_fn 绕开网络。
 """
 from __future__ import annotations
@@ -10,13 +10,16 @@ from __future__ import annotations
 from config import SELFCHECK_SAMPLES
 
 
+def _bigrams(text: str) -> set:
+    return {text[i:i+2] for i in range(len(text) - 1)} if len(text) > 1 else {text}
+
+
 def _text_similarity(a: str, b: str) -> float:
-    """Jaccard 相似度（词级）。"""
-    wa = set(a.lower().split())
-    wb = set(b.lower().split())
-    if not wa or not wb:
+    """字符 bigram 集合 Jaccard（中文无需分词，英文同样有效）。"""
+    ba, bb = _bigrams(a), _bigrams(b)
+    if not ba or not bb:
         return 0.0
-    return len(wa & wb) / len(wa | wb)
+    return len(ba & bb) / len(ba | bb)
 
 
 def consistency_score(answers: list[str]) -> float:

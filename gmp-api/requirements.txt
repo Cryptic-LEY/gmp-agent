@@ -6,7 +6,7 @@ python-dotenv==1.0.1
 langchain-core==0.3.0
 langgraph==0.2.0
 pymysql==2.2.8
-faiss-cpu==1.14.3
+hnswlib==0.8.0
 numpy>=1.26
 pytest>=8.0
 dashscope>=1.20.0

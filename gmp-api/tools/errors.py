@@ -19,3 +19,7 @@ class UpstreamError(ToolError):
 
 class ForbiddenError(ToolError):
     """Sensitive 工具未授权 → 停止 + HITL（06 处理）。"""
+
+
+class ToolTimeoutError(ToolError):
+    """工具调用超时（归类为不可重试，调用方注入超时提示）。"""

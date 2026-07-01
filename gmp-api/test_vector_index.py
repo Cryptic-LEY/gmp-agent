@@ -1,11 +1,12 @@
 # -*- coding: utf-8 -*-
 """
-01-vector-engine 子任务4：进程内 faiss 向量索引单测。
+01-vector-engine 子任务4：进程内 hnswlib HNSW 向量索引单测。
 
 合成向量测索引逻辑（零成本）；build_index 读真库（只读，免费）验证真实数据可检索，
-并证明已消灭「每请求全量加载 + Python 逐条 cosine」反模式（索引一次性构建、查询走 faiss）。
+并证明已消灭「每请求全量加载 + Python 逐条 cosine」反模式（索引一次性构建、查询走 HNSW）。
 """
 import json
+from pathlib import Path
 
 from rag.vector_index import VectorIndex, build_index
 from rag.retriever import _get_conn
@@ -14,6 +15,13 @@ from rag.retriever import _get_conn
 def _rec(id, vec, doc_type="regulation", title="", content="", edu_level=None):
     return {"id": id, "doc_type": doc_type, "title": title,
             "content": content, "edu_level": edu_level, "vec": vec}
+
+
+def test_hnswlib_not_faiss_in_source():
+    """验证 vector_index.py 使用 hnswlib 而非 faiss（P1 验收核心项）。"""
+    src = (Path(__file__).parent / "rag" / "vector_index.py").read_text(encoding="utf-8")
+    assert "import hnswlib" in src, "vector_index.py 未导入 hnswlib"
+    assert "import faiss" not in src, "vector_index.py 仍含 faiss 导入"
 
 
 def test_search_returns_nearest_by_cosine():

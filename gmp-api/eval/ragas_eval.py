@@ -155,9 +155,9 @@ def evaluate_one(record: dict, ask_fn=None) -> dict:
         return {"id": record["id"], "error": str(e)}
     latency_ms = int((time.monotonic() - t0) * 1000)
 
-    # 取检索到的 context 文本（sources 是 reg_id 列表；这里用 answer_points 作 context 近似）
-    # 实际评测中应从 retrieved_docs 取 content；这里用 answer_points 作为 ground-truth context
-    contexts = answer_points  # RAGAS-style: use reference answer as context proxy
+    from rag.retriever import retrieve
+    retrieved = retrieve(question, edu_level=edu_level, query_vec=None)
+    contexts = [chunk.content for chunk in retrieved]
 
     cp = _score_context_precision(question, contexts, answer_points)
     ff = _score_faithfulness(answer, contexts)

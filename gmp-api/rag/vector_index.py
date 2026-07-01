@@ -1,6 +1,8 @@
 """
 进程内向量索引（01-vector-engine 子任务4，Phase-2 升级为 small-to-big）。
 
+使用 hnswlib HNSW 索引（space='cosine'，M=16，O(log N) 检索）。
+
 Phase 1 建索引时从 reg_library 读（嵌入向量还不存在）；
 Phase 2 完成后（reg_chunks 全部嵌入）切到 reg_chunks：
   - 向量来自 small_text（~300字，精准定位）
@@ -16,7 +18,7 @@ import logging
 from collections import defaultdict
 from dataclasses import dataclass
 
-import faiss
+import hnswlib
 import numpy as np
 
 from config import EMB_DIM
@@ -24,6 +26,12 @@ from config import EMB_DIM
 logger = logging.getLogger(__name__)
 
 _NEG_INF = float("-inf")
+
+# HNSW 超参（spec 01-vector-engine.md §4.3）
+_HNSW_M               = 16
+_HNSW_EF_CONSTRUCTION = 200
+_HNSW_EF_SEARCH       = 50
+_HNSW_MAX_ELEMENTS    = 100_000  # 初始最大容量，超出时自动 resize
 
 
 @dataclass
@@ -39,15 +47,23 @@ class IndexHit:
 class VectorIndex:
     def __init__(self, dim: int = EMB_DIM):
         self.dim = dim
-        self._index = faiss.IndexFlatIP(dim)
-        self._records: list[dict] = []           # faiss label i → 记录（不含 vec）
-        self._chunk_id_to_label: dict[str, int] = {}   # chunk_id（内部键）→ faiss label
-        # reg_id（对外键）→ [chunk_id, ...]，用于 similarity 多块取最高分
+        self._index = hnswlib.Index(space="cosine", dim=dim)
+        self._index.init_index(
+            max_elements=_HNSW_MAX_ELEMENTS,
+            M=_HNSW_M,
+            ef_construction=_HNSW_EF_CONSTRUCTION,
+            random_seed=42,
+        )
+        self._index.set_ef(_HNSW_EF_SEARCH)
+        self._records: list[dict] = []           # label i → 记录（不含 vec）
+        self._vecs: list[np.ndarray] = []        # label i → 归一化向量，供 similarity() 点积
+        self._chunk_id_to_label: dict[str, int] = {}   # chunk_id → label
+        # reg_id → [chunk_id, ...]，用于 similarity 多块取最高分
         self._reg_to_chunks: dict[str, list[str]] = defaultdict(list)
 
     @property
     def size(self) -> int:
-        return self._index.ntotal
+        return self._index.get_current_count()
 
     def add_items(self, records: list[dict]) -> None:
         """
@@ -60,14 +76,25 @@ class VectorIndex:
         if not records:
             return
         vecs = np.asarray([r["vec"] for r in records], dtype="float32")
-        faiss.normalize_L2(vecs)
+        # 归一化存储：hnswlib cosine 空间内部也会归一化，另存一份用于 similarity() 点积
+        norms = np.linalg.norm(vecs, axis=1, keepdims=True)
+        norms[norms == 0] = 1.0
+        vecs_norm = vecs / norms
+
         base = len(self._records)
-        self._index.add(vecs)
+        needed = base + len(records)
+        if needed > self._index.max_elements:
+            self._index.resize_index(max(needed * 2, _HNSW_MAX_ELEMENTS))
+
+        labels = np.arange(base, base + len(records), dtype=np.uint64)
+        self._index.add_items(vecs_norm, labels)
+
         for j, r in enumerate(records):
             chunk_id = str(r["id"])
-            reg_id   = str(r.get("reg_id") or r["id"])   # 没有 reg_id 时退化
+            reg_id   = str(r.get("reg_id") or r["id"])
             lbl = base + j
             self._records.append({k: v for k, v in r.items() if k != "vec"})
+            self._vecs.append(vecs_norm[j])
             self._chunk_id_to_label[chunk_id] = lbl
             self._reg_to_chunks[reg_id].append(chunk_id)
 
@@ -84,9 +111,10 @@ class VectorIndex:
         """
         if not ids:
             return {}
-        q = np.asarray([query_vec], dtype="float32")
-        faiss.normalize_L2(q)
-        qv = q[0]
+        q = np.asarray(query_vec, dtype="float32")
+        norm = np.linalg.norm(q)
+        if norm > 0:
+            q = q / norm
         out: dict[str, float] = {}
         for reg_id in ids:
             chunk_ids = self._reg_to_chunks.get(reg_id, [])
@@ -95,11 +123,9 @@ class VectorIndex:
                 lbl = self._chunk_id_to_label.get(cid)
                 if lbl is None:
                     continue
-                stored = self._index.reconstruct(lbl)
-                score  = float(np.dot(qv, stored))
+                score = float(np.dot(q, self._vecs[lbl]))
                 if score > best:
                     best = score
-            # 只在找到有效 chunk 且有实际分数时写入
             if chunk_ids and best > _NEG_INF:
                 out[reg_id] = best
         return out
@@ -109,20 +135,22 @@ class VectorIndex:
         向量检索，按 reg_id 去重（多块取最高分），edu_level 后过滤。
         返回按 score 降序的 IndexHit 列表（id = reg_id）。
         fetch = k * 16：多取候选以应对高密度分块的同 reg_id 去重损耗。
+        hnswlib cosine 距离 = 1 - cosine_similarity，故 score = 1 - distance。
         """
         if self.size == 0:
             return []
         q = np.asarray([query_vec], dtype="float32")
-        faiss.normalize_L2(q)
-        # k * 16 提供足够余量应对块集中在少数 reg_id 的极端情况
+        norm = np.linalg.norm(q)
+        if norm > 0:
+            q = q / norm
         fetch = min(k * 16, self.size)
-        scores, idxs = self._index.search(q, fetch)
+        # knn_query 返回 (labels, distances)；cosine space distance = 1 - cos_sim
+        labels, distances = self._index.knn_query(q, k=fetch)
 
         seen_reg: dict[str, IndexHit] = {}
-        for score, i in zip(scores[0], idxs[0]):
-            if i < 0:
-                continue
-            rec    = self._records[i]
+        for lbl, dist in zip(labels[0], distances[0]):
+            score  = 1.0 - float(dist)
+            rec    = self._records[int(lbl)]
             reg_id = str(rec.get("reg_id") or rec["id"])
             if edu_level and rec.get("edu_level") and rec["edu_level"] != edu_level:
                 continue
@@ -130,7 +158,7 @@ class VectorIndex:
                 seen_reg[reg_id] = IndexHit(
                     id=reg_id, doc_type=rec["doc_type"], title=rec["title"],
                     content=rec["content"], edu_level=rec.get("edu_level"),
-                    score=float(score),
+                    score=score,
                 )
 
         hits = sorted(seen_reg.values(), key=lambda h: h.score, reverse=True)[:k]

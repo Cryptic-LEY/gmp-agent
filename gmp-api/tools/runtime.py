@@ -9,12 +9,26 @@ from __future__ import annotations
 import time
 from typing import Any, Callable
 
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as _FuturesTimeout
+
 from tools.errors import (
-    ForbiddenError, InvalidArgsError, NotFoundError, UpstreamError,
+    ForbiddenError, InvalidArgsError, NotFoundError, ToolTimeoutError, UpstreamError,
 )
 
-_NON_RETRYABLE = (NotFoundError, ForbiddenError, InvalidArgsError)
+_NON_RETRYABLE = (NotFoundError, ForbiddenError, InvalidArgsError, ToolTimeoutError)
 _BACKOFF_SEC = [1, 2, 4]          # F4：指数退避序列
+
+
+def _call_with_timeout(fn: Callable, args: dict, timeout_sec: int) -> Any:
+    """在独立线程执行 fn(**args)，超时抛 ToolTimeoutError（不等待线程结束）。"""
+    ex = ThreadPoolExecutor(max_workers=1)
+    future = ex.submit(fn, **args)
+    try:
+        return future.result(timeout=timeout_sec)
+    except _FuturesTimeout:
+        raise ToolTimeoutError(f"工具超时（>{timeout_sec}s）")
+    finally:
+        ex.shutdown(wait=False)
 
 
 def run_with_retry(
@@ -33,15 +47,15 @@ def run_with_retry(
         on_retry    : (attempt: int, error_msg: str) → None，每次失败后回调
                       用于把错误反馈回模型（F4 "每次失败回灌模型"）
     """
-    from config import TOOL_RETRY_MAX
+    from config import TOOL_RETRY_MAX, TOOL_TIMEOUT_SEC
     retries = max_retries if max_retries is not None else TOOL_RETRY_MAX
 
     last_err: Exception | None = None
     for attempt in range(retries + 1):
         try:
-            return fn(**args)
+            return _call_with_timeout(fn, args, TOOL_TIMEOUT_SEC)
         except _NON_RETRYABLE:
-            raise                            # 不可重试类直接传播
+            raise                            # 不可重试类直接传播（含 ToolTimeoutError）
         except UpstreamError as e:
             last_err = e
             if attempt < retries:

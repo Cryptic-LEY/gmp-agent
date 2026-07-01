@@ -23,6 +23,7 @@ from config import (
     RAG_GRAPH_THRESHOLD, RAG_FINAL_TOP_N,
     RAG_RERANK_ENABLED, RAG_RERANK_TOP_BEFORE,
     RAG_PARALLEL_RETRIEVE,
+    RAG_FUSION_VEC_WEIGHT, RAG_FUSION_BM25_WEIGHT,
 )
 
 
@@ -120,9 +121,31 @@ def _graph_expand(conn, reg_ids: list[str], kp_ids: list[str]) -> tuple[list[str
     )
 
 
+def _fuse_scores(
+    vec_scores: dict[str, float],
+    bm25_scores: dict[str, float],
+    vec_weight: float,
+    bm25_weight: float,
+) -> dict[str, float]:
+    """Min-max 归一化后加权融合两路分数（spec P2 §4.4）。"""
+    def _minmax(d: dict[str, float]) -> dict[str, float]:
+        if not d:
+            return {}
+        lo, hi = min(d.values()), max(d.values())
+        span = hi - lo + 1e-9
+        return {k: (v - lo) / span for k, v in d.items()}
+
+    vn = _minmax(vec_scores)
+    bn = _minmax(bm25_scores)
+    return {
+        rid: vec_weight * vn.get(rid, 0.0) + bm25_weight * bn.get(rid, 0.0)
+        for rid in set(vn) | set(bn)
+    }
+
+
 def _parallel_fetch(question: str, query_vec: list[float], edu_level, idx):
     """
-    并行检索内核：向量搜索（faiss）与 MySQL FULLTEXT + article_lookup 同时执行。
+    并行检索内核：向量搜索（HNSW）与 MySQL FULLTEXT + article_lookup 同时执行。
     返回 (vector_hits, ft_ids, art_rows)
     向量搜索纯内存无需 DB；MySQL 路径在此函数内用独立连接。
     """
@@ -143,7 +166,7 @@ def retrieve(question: str, edu_level: str | None = None,
              query_vec: list[float] | None = None,
              rerank_fn=None) -> list[DocChunk]:
     """
-    混合检索主入口：进程内 faiss 向量索引 + MySQL FULLTEXT + kp_reg_links 图遍历。
+    混合检索主入口：进程内 HNSW 向量索引 + MySQL FULLTEXT + kp_reg_links 图遍历。
 
     不再每请求全量加载向量；BM25/图遍历命中的条目用索引内重建向量重打分。
     query_vec 可注入（测试/缓存复用），省去 DashScope 查询嵌入。
@@ -163,56 +186,94 @@ def retrieve(question: str, edu_level: str | None = None,
         # ── 1+1b+2: 向量、article、FULLTEXT（串行或并行） ────────────────────
         if RAG_PARALLEL_RETRIEVE:
             vector_hits, ft_ids_raw, art_rows = _parallel_fetch(question, query_vec, edu_level, idx)
-            # 将并行结果填入 all_reg / all_kp
-            all_reg: dict[str, tuple] = {}
+            # 将并行结果收集为原始分 → 后续 min-max 融合
             all_kp: dict[str, tuple] = {}
+            _vec_reg_scores: dict[str, float] = {}
+            _vec_reg_meta: dict[str, tuple] = {}
             for h in vector_hits:
                 if h.score < RAG_THRESHOLD:
                     continue
-                bucket = all_reg if h.doc_type == 'regulation' else all_kp
-                if len(bucket) < RAG_TOP_K:
-                    bucket[h.id] = (h.id, h.title, h.content, h.score)
-            # article 置顶
+                if h.doc_type == 'kp':
+                    if len(all_kp) < RAG_TOP_K:
+                        all_kp[h.id] = (h.id, h.title, h.content, h.score)
+                else:
+                    _vec_reg_scores[h.id] = h.score
+                    _vec_reg_meta[h.id] = (h.title, h.content)
+            # BM25 cosine 重打分（全量 ft_ids_raw，不过滤 vec 已命中项）
+            _bm25_sims = idx.similarity(query_vec, ft_ids_raw)
+            _bm25_reg_scores: dict[str, float] = {
+                r: s for r, s in _bm25_sims.items() if s >= RAG_GRAPH_THRESHOLD
+            }
+            _bm25_reg_meta: dict[str, tuple] = {}
+            for _rid in _bm25_reg_scores:
+                _rec = idx.get_record(_rid)
+                if _rec:
+                    _bm25_reg_meta[_rid] = (_rec['title'], _rec['content'])
+            # min-max 归一化 + 0.6/0.4 加权融合
+            _fused = _fuse_scores(_vec_reg_scores, _bm25_reg_scores,
+                                  RAG_FUSION_VEC_WEIGHT, RAG_FUSION_BM25_WEIGHT)
+            all_reg: dict[str, tuple] = {}
+            for _rid, _fscore in sorted(_fused.items(), key=lambda x: x[1], reverse=True)[:RAG_TOP_K]:
+                if _rid in _vec_reg_meta:
+                    _t, _c = _vec_reg_meta[_rid]
+                elif _rid in _bm25_reg_meta:
+                    _t, _c = _bm25_reg_meta[_rid]
+                else:
+                    continue
+                all_reg[_rid] = (_rid, _t, _c, _fscore)
+            # article 置顶（融合后覆盖，强制 score=1.0）
             if art_rows:
                 art_sims = idx.similarity(query_vec, [r[0] for r in art_rows])
                 ranked = sorted(art_rows, key=lambda r: art_sims.get(r[0], 0.0), reverse=True)
                 for reg_id, art, content in ranked[:ARTICLE_HIT_CAP]:
                     all_reg[reg_id] = (reg_id, art or '', content or '', 1.0)
-            # BM25 重打分
-            ft_ids = [r for r in ft_ids_raw if r not in all_reg]
-            for r_id, score in idx.similarity(query_vec, ft_ids).items():
-                if score < RAG_GRAPH_THRESHOLD:
-                    continue
-                rec = idx.get_record(r_id)
-                if rec:
-                    all_reg[r_id] = (r_id, rec['title'], rec['content'], score)
         else:
-            # ── 1. 向量召回（faiss，edu_level 在索引内过滤） ─────────────────
-            all_reg: dict[str, tuple] = {}
+            # ── 1. 向量召回（HNSW，edu_level 在索引内过滤） ──────────────────
             all_kp: dict[str, tuple] = {}
+            _vec_reg_scores: dict[str, float] = {}
+            _vec_reg_meta: dict[str, tuple] = {}
             for h in idx.search(query_vec, k=RAG_TOP_K * 4, edu_level=edu_level):
                 if h.score < RAG_THRESHOLD:
                     continue
-                bucket = all_reg if h.doc_type == 'regulation' else all_kp
-                if len(bucket) < RAG_TOP_K:
-                    bucket[h.id] = (h.id, h.title, h.content, h.score)
+                if h.doc_type == 'kp':
+                    if len(all_kp) < RAG_TOP_K:
+                        all_kp[h.id] = (h.id, h.title, h.content, h.score)
+                else:
+                    _vec_reg_scores[h.id] = h.score
+                    _vec_reg_meta[h.id] = (h.title, h.content)
 
             # ── 1b. 硬指标：第X条精确命中（article_num 直查置顶） ──────────────
             art_rows = _article_lookup(conn, question)
+
+            # ── 2. BM25(FULLTEXT) 召回 → cosine 重打分（全量，不过滤 vec 已命中项）
+            _ft_ids_all = _fulltext_search(conn, question, RAG_TOP_K)
+            _bm25_sims = idx.similarity(query_vec, _ft_ids_all)
+            _bm25_reg_scores: dict[str, float] = {
+                r: s for r, s in _bm25_sims.items() if s >= RAG_GRAPH_THRESHOLD
+            }
+            _bm25_reg_meta: dict[str, tuple] = {}
+            for _rid in _bm25_reg_scores:
+                _rec = idx.get_record(_rid)
+                if _rec:
+                    _bm25_reg_meta[_rid] = (_rec['title'], _rec['content'])
+            # min-max 归一化 + 0.6/0.4 加权融合
+            _fused = _fuse_scores(_vec_reg_scores, _bm25_reg_scores,
+                                  RAG_FUSION_VEC_WEIGHT, RAG_FUSION_BM25_WEIGHT)
+            all_reg: dict[str, tuple] = {}
+            for _rid, _fscore in sorted(_fused.items(), key=lambda x: x[1], reverse=True)[:RAG_TOP_K]:
+                if _rid in _vec_reg_meta:
+                    _t, _c = _vec_reg_meta[_rid]
+                elif _rid in _bm25_reg_meta:
+                    _t, _c = _bm25_reg_meta[_rid]
+                else:
+                    continue
+                all_reg[_rid] = (_rid, _t, _c, _fscore)
+            # article 置顶（融合后覆盖，强制 score=1.0）
             if art_rows:
                 art_sims = idx.similarity(query_vec, [r[0] for r in art_rows])
                 ranked = sorted(art_rows, key=lambda r: art_sims.get(r[0], 0.0), reverse=True)
                 for reg_id, art, content in ranked[:ARTICLE_HIT_CAP]:
                     all_reg[reg_id] = (reg_id, art or '', content or '', 1.0)
-
-            # ── 2. BM25(FULLTEXT) 召回 → 用索引重打分并入池 ──────────────────
-            ft_ids = [r for r in _fulltext_search(conn, question, RAG_TOP_K) if r not in all_reg]
-            for r_id, score in idx.similarity(query_vec, ft_ids).items():
-                if score < RAG_GRAPH_THRESHOLD:
-                    continue
-                rec = idx.get_record(r_id)
-                if rec:
-                    all_reg[r_id] = (r_id, rec['title'], rec['content'], score)
 
         # ── 3. kp_reg_links 一跳图遍历扩展 ──────────────────────────────────
         extra_reg_ids, extra_kp_ids = _graph_expand(conn, list(all_reg), list(all_kp))

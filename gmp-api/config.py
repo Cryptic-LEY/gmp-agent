@@ -65,6 +65,10 @@ LLM_MODEL_HEAVY = os.getenv("LLM_MODEL_HEAVY", LLM_MODEL)      # 重推理/criti
 # 并行检索（02-context-perf）
 RAG_PARALLEL_RETRIEVE = os.getenv("RAG_PARALLEL_RETRIEVE", "true").lower() == "true"
 
+# 混合检索融合权重（spec P2：min-max 归一化后加权融合）
+RAG_FUSION_VEC_WEIGHT  = float(os.getenv("RAG_FUSION_VEC_WEIGHT",  "0.6"))
+RAG_FUSION_BM25_WEIGHT = float(os.getenv("RAG_FUSION_BM25_WEIGHT", "0.4"))
+
 # Agent 推理步骤上限（02-context-perf）
 MAX_REASONING_STEPS = int(os.getenv("MAX_REASONING_STEPS", "5"))
 
