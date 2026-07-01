@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import sys
 import time
 from pathlib import Path
@@ -91,7 +92,7 @@ def _score_faithfulness(
     先让 LLM 分解声明，再逐条判断。
     """
     if not contexts or not answer:
-        return 1.0
+        return 0.0
     ctx_text = "\n".join(contexts[:5])
     prompt = (
         f"参考资料：\n{ctx_text[:2000]}\n\n"
@@ -104,11 +105,11 @@ def _score_faithfulness(
         res = _llm(prompt)
         lines = [l.strip() for l in res.strip().splitlines() if "|" in l]
         if not lines:
-            return 1.0
+            return float("nan")
         supported = sum(1 for l in lines if l.split("|")[-1].strip().upper() == "YES")
         return supported / len(lines)
     except Exception:
-        return 1.0
+        return float("nan")
 
 
 def _score_answer_relevance(question: str, answer: str) -> float:
@@ -219,9 +220,13 @@ def run_eval(n: int | None = None, output_path: str | None = None) -> dict:
         print("\n  无有效结果，请检查错误。")
         return {}
 
-    avg_cp = sum(r["context_precision"] for r in valid) / len(valid)
-    avg_ff = sum(r["faithfulness"] for r in valid) / len(valid)
-    avg_ar = sum(r["answer_relevance"] for r in valid) / len(valid)
+    def _avg(key: str) -> float:
+        vals = [r[key] for r in valid if not math.isnan(r.get(key, float("nan")))]
+        return sum(vals) / len(vals) if vals else float("nan")
+
+    avg_cp = _avg("context_precision")
+    avg_ff = _avg("faithfulness")
+    avg_ar = _avg("answer_relevance")
 
     summary = {
         "n_evaluated": len(valid),

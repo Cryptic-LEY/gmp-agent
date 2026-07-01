@@ -202,7 +202,7 @@ def retrieve(question: str, edu_level: str | None = None,
                 if h.doc_type == 'kp':
                     if len(all_kp) < RAG_TOP_K:
                         all_kp[h.id] = (h.id, h.title, h.content, h.score)
-                else:
+                elif h.doc_type != 'experience':
                     _vec_reg_scores[h.id] = h.score
                     _vec_reg_meta[h.id] = (h.title, h.content)
             # BM25 cosine 重打分（全量 ft_ids_raw，不过滤 vec 已命中项）
@@ -212,7 +212,7 @@ def retrieve(question: str, edu_level: str | None = None,
             }
             _bm25_reg_meta: dict[str, tuple] = {}
             for _rid in _bm25_reg_scores:
-                _rec = idx.get_record(_rid)
+                _rec = idx.get_best_record(_rid, query_vec)
                 if _rec:
                     _bm25_reg_meta[_rid] = (_rec['title'], _rec['content'])
             # min-max 归一化 + 0.6/0.4 加权融合
@@ -244,7 +244,7 @@ def retrieve(question: str, edu_level: str | None = None,
                 if h.doc_type == 'kp':
                     if len(all_kp) < RAG_TOP_K:
                         all_kp[h.id] = (h.id, h.title, h.content, h.score)
-                else:
+                elif h.doc_type != 'experience':
                     _vec_reg_scores[h.id] = h.score
                     _vec_reg_meta[h.id] = (h.title, h.content)
 
@@ -259,7 +259,7 @@ def retrieve(question: str, edu_level: str | None = None,
             }
             _bm25_reg_meta: dict[str, tuple] = {}
             for _rid in _bm25_reg_scores:
-                _rec = idx.get_record(_rid)
+                _rec = idx.get_best_record(_rid, query_vec)
                 if _rec:
                     _bm25_reg_meta[_rid] = (_rec['title'], _rec['content'])
             # min-max 归一化 + 0.6/0.4 加权融合
@@ -287,7 +287,7 @@ def retrieve(question: str, edu_level: str | None = None,
         for r_id, score in idx.similarity(query_vec, [r for r in extra_reg_ids if r not in all_reg]).items():
             if score < RAG_GRAPH_THRESHOLD:
                 continue
-            rec = idx.get_record(r_id)
+            rec = idx.get_best_record(r_id, query_vec)
             if rec:
                 all_reg[r_id] = (r_id, rec['title'], rec['content'], score)
 

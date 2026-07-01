@@ -197,10 +197,11 @@ def ask_agent(
                 if "user_id" not in args:
                     args = {**args, "user_id": user_id}
 
-            # F6：HITL 闸门（sensitive 工具执行前检查授权，绑定 tool_name 防越权）
+            # F6：HITL 闸门（sensitive 工具执行前检查授权，绑定 tool_name+args_hash+user_id）
             if t.level == "sensitive" and HITL_ENABLED:
                 already_ok = pre_approved and any(
-                    is_approved_for(aid, name) for aid in pre_approved
+                    is_approved_for(aid, name, args=args, user_id=user_id)
+                    for aid in pre_approved
                 )
                 if not already_ok:
                     approval_id = request_approval(name, args)

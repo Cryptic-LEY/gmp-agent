@@ -113,6 +113,44 @@ class VectorIndex:
             return self._records[lbl] if lbl is not None else None
         return None
 
+    def get_best_record(self, id_: str, query_vec: list[float] | None) -> dict | None:
+        """
+        按 reg_id 取相似度最高的块记录（Phase-2 修正：BM25/图扩展场景）。
+        vector search 已在 search() 中按 reg_id 去重取最高分，无需此方法；
+        BM25 和图扩展用 reg_id 查 big_text 时，必须选最相关块而非首块。
+        query_vec 为 None 时退化为 get_record（取首块）。
+        """
+        if query_vec is None:
+            return self.get_record(id_)
+
+        # chunk_id 直接命中（无需按 reg_id 选最优块）
+        lbl = self._chunk_id_to_label.get(id_)
+        if lbl is not None:
+            return self._records[lbl]
+
+        # reg_id → 遍历所有块，取点积最高的块
+        chunk_ids = self._reg_to_chunks.get(id_, [])
+        if not chunk_ids:
+            return None
+
+        q = np.asarray(query_vec, dtype="float32")
+        norm = np.linalg.norm(q)
+        if norm > 0:
+            q = q / norm
+
+        best_lbl: int | None = None
+        best_score = float("-inf")
+        for cid in chunk_ids:
+            lbl = self._chunk_id_to_label.get(cid)
+            if lbl is None:
+                continue
+            score = float(np.dot(q, self._vecs[lbl]))
+            if score > best_score:
+                best_score = score
+                best_lbl = lbl
+
+        return self._records[best_lbl] if best_lbl is not None else None
+
     def similarity(self, query_vec, ids: list[str]) -> dict[str, float]:
         """
         给定一批 reg_id，返回与 query 的最高 cosine（多块取最大）。

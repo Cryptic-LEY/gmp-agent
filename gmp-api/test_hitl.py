@@ -58,10 +58,30 @@ def test_f6_approved_removed_from_pending():
 
 def test_f6_is_approved_for_binds_tool_name():
     """审批 ID 只对绑定的 tool_name 有效，不能用于其他工具（防越权）。"""
+    approval_id_a = request_approval("update_user_profile", {"user_id": "u1", "patch": {}})
+    approval_id_b = request_approval("update_user_profile", {"user_id": "u1", "patch": {}})
+    approve(approval_id_a)
+    approve(approval_id_b)
+    assert not is_approved_for(approval_id_a, "generate_courseware")  # 其他工具被拒
+    assert is_approved_for(approval_id_b, "update_user_profile")      # 正确工具通过
+
+
+def test_f6_one_time_consumption():
+    """审批 ID 一次性消费后不可重放（防 HITL 重放攻击）。"""
     approval_id = request_approval("update_user_profile", {"user_id": "u1", "patch": {}})
     approve(approval_id)
-    assert is_approved_for(approval_id, "update_user_profile")    # 正确工具
-    assert not is_approved_for(approval_id, "generate_courseware")  # 其他工具被拒
+    assert is_approved_for(approval_id, "update_user_profile")     # 第一次通过并消费
+    assert not is_approved_for(approval_id, "update_user_profile") # 第二次重放被拒
+
+
+def test_f6_cross_user_replay_blocked():
+    """不同用户的审批 ID 不能被其他用户使用（防跨用户重放）。"""
+    approval_id = request_approval(
+        "update_user_profile", {"user_id": "u1", "patch": {}}, user_id="user-001"
+    )
+    approve(approval_id)
+    assert not is_approved_for(approval_id, "update_user_profile", user_id="user-002")
+    assert is_approved_for(approval_id, "update_user_profile", user_id="user-001")
 
 
 def test_f6_cross_tool_approval_blocked(monkeypatch):
