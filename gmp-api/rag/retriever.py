@@ -31,7 +31,7 @@ from config import (
 @dataclass
 class DocChunk:
     id: str          # reg_id 或 kp_id
-    doc_type: str    # 'regulation' | 'kp'
+    doc_type: str    # 'regulation' | 'kp' | 'experience'
     title: str
     content: str
     score: float
@@ -189,6 +189,9 @@ def retrieve(question: str, edu_level: str | None = None,
         if not query_vec or idx is None or idx.size == 0:
             return _keyword_fallback_chunks(conn, question, edu_level)
 
+        # 历史经验候选池（独立收集，不混入法规引用池；spec C6）
+        all_experience: dict[str, tuple] = {}
+
         # ── 1+1b+2: 向量、article、FULLTEXT（串行或并行） ────────────────────
         if RAG_PARALLEL_RETRIEVE:
             vector_hits, ft_ids_raw, art_rows = _parallel_fetch(question, query_vec, edu_level, idx)
@@ -202,7 +205,10 @@ def retrieve(question: str, edu_level: str | None = None,
                 if h.doc_type == 'kp':
                     if len(all_kp) < RAG_TOP_K:
                         all_kp[h.id] = (h.id, h.title, h.content, h.score)
-                elif h.doc_type != 'experience':
+                elif h.doc_type == 'experience':
+                    if len(all_experience) < 2:
+                        all_experience[h.id] = (h.id, h.content, h.score * 0.5)
+                else:
                     _vec_reg_scores[h.id] = h.score
                     _vec_reg_meta[h.id] = (h.title, h.content)
             # BM25 cosine 重打分（全量 ft_ids_raw，不过滤 vec 已命中项）
@@ -244,7 +250,10 @@ def retrieve(question: str, edu_level: str | None = None,
                 if h.doc_type == 'kp':
                     if len(all_kp) < RAG_TOP_K:
                         all_kp[h.id] = (h.id, h.title, h.content, h.score)
-                elif h.doc_type != 'experience':
+                elif h.doc_type == 'experience':
+                    if len(all_experience) < 2:
+                        all_experience[h.id] = (h.id, h.content, h.score * 0.5)
+                else:
                     _vec_reg_scores[h.id] = h.score
                     _vec_reg_meta[h.id] = (h.title, h.content)
 
@@ -313,6 +322,9 @@ def retrieve(question: str, edu_level: str | None = None,
             chunks.append(DocChunk(r_id, 'regulation', title, content, score))
         for k_id, title, content, score in sorted_kp:
             chunks.append(DocChunk(k_id, 'kp', title, content, score))
+        # 低权重历史经验：不进法规引用池，以 0.5x 分数作辅助参考（spec C6）
+        for exp_id, exp_content, exp_score in list(all_experience.values())[:2]:
+            chunks.append(DocChunk(exp_id, 'experience', '', exp_content, exp_score))
 
         if RAG_RERANK_ENABLED and chunks:
             from rag.reranker import rerank as _rerank

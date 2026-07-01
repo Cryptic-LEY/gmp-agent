@@ -60,15 +60,25 @@ def test_evaluate_one_contexts_from_retrieve_not_answer_points():
 
 
 def test_evaluate_one_scores_in_range():
-    """三维分数均在 [0.0, 1.0]，latency_ms >= 0。"""
+    """三维分数均在 [0.0, 1.0] 或 None（judge 解析失败），latency_ms >= 0。"""
+    def _smart_llm(prompt: str) -> str:
+        # faithfulness scorer 需要 "声明 | YES/NO" 格式
+        if "每行一条" in prompt:
+            return "GMP无菌区应保持正压 | YES"
+        # answer_relevance scorer 需要 1-10 数字
+        if "评分1-10" in prompt:
+            return "9"
+        # context_precision scorer 需要 YES/NO
+        return "YES"
+
     with patch("rag.retriever.retrieve", return_value=MOCK_CHUNKS), \
-         patch("eval.ragas_eval._llm", return_value="YES"):
+         patch("eval.ragas_eval._llm", side_effect=_smart_llm):
         result = evaluate_one(MOCK_RECORD, ask_fn=_mock_ask_fn)
 
     assert "error" not in result, f"evaluate_one 返回错误: {result.get('error')}"
     for key in ("context_precision", "faithfulness", "answer_relevance"):
         v = result[key]
-        assert 0.0 <= v <= 1.0, f"{key} = {v} 超出 [0, 1]"
+        assert v is None or 0.0 <= v <= 1.0, f"{key} = {v} 超出 [0, 1] 且不为 None"
     assert result["latency_ms"] >= 0
 
 

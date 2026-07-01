@@ -10,12 +10,21 @@
 import json
 import time
 
+import pytest
+
 import rag.retriever as retriever
 import rag.vector_index as vi
 from rag.retriever import retrieve, DocChunk, _get_conn
 
-# 用真库现有向量建一次进程内索引（只读、免费）
-vi.rebuild()
+# 用真库现有向量建一次进程内索引（只读）。
+# MySQL 不可用时跳过整个模块，不中断 pytest 收集其他测试文件。
+pytestmark = pytest.mark.integration
+
+try:
+    vi.rebuild()
+except Exception as _db_err:
+    pytest.skip(f"MySQL unavailable — integration tests skipped: {_db_err}",
+                allow_module_level=True)
 
 
 def _a_reg_vector():
@@ -45,7 +54,7 @@ def test_retrieve_preserves_docchunk_contract():
     _, emb = _a_reg_vector()
     chunks = retrieve("洁净区环境监测", query_vec=json.loads(emb))
     for c in chunks:
-        assert c.id and c.doc_type in ("regulation", "kp")
+        assert c.id and c.doc_type in ("regulation", "kp", "experience")
         assert isinstance(c.score, float)
 
 

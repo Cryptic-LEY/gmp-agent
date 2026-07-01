@@ -20,7 +20,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import math
 import sys
 import time
 from pathlib import Path
@@ -59,14 +58,16 @@ def _llm(prompt: str) -> str:
 
 def _score_context_precision(
     question: str, contexts: list[str], answer_points: list[str]
-) -> float:
+) -> float | None:
     """
     Context Precision: 检索到的 contexts 中，与 answer_points 相关的比例。
     用 LLM 判断每个 context 是否有助于回答该问题。
+    LLM 异常时跳过该 context（不算不相关），全部失败时返回 None。
     """
     if not contexts:
         return 0.0
     relevant = 0
+    n_judged = 0
     for ctx in contexts:
         prompt = (
             f"问题：{question}\n\n"
@@ -77,19 +78,23 @@ def _score_context_precision(
         )
         try:
             res = _llm(prompt)
+            n_judged += 1
             if res.strip().upper().startswith("YES"):
                 relevant += 1
         except Exception:
-            pass
-    return relevant / len(contexts)
+            pass  # judge 失败时跳过该 context，不当成不相关
+    if n_judged == 0:
+        return None  # 所有 LLM 调用都失败
+    return relevant / n_judged
 
 
 def _score_faithfulness(
     answer: str, contexts: list[str]
-) -> float:
+) -> float | None:
     """
     Faithfulness: 答案中的声明有多少比例有 context 支撑。
     先让 LLM 分解声明，再逐条判断。
+    contexts/answer 为空 → 0.0；解析失败或异常 → None（评测失败，不混入平均值）。
     """
     if not contexts or not answer:
         return 0.0
@@ -105,17 +110,18 @@ def _score_faithfulness(
         res = _llm(prompt)
         lines = [l.strip() for l in res.strip().splitlines() if "|" in l]
         if not lines:
-            return float("nan")
+            return None  # judge 输出无法解析
         supported = sum(1 for l in lines if l.split("|")[-1].strip().upper() == "YES")
         return supported / len(lines)
     except Exception:
-        return float("nan")
+        return None  # LLM 调用失败
 
 
-def _score_answer_relevance(question: str, answer: str) -> float:
+def _score_answer_relevance(question: str, answer: str) -> float | None:
     """
     Answer Relevance: 答案对问题的相关程度。
     让 LLM 根据答案反推问题，看与原问题的语义匹配度。
+    answer 为空 → 0.0；解析失败或异常 → None（不再返回 0.5 偏向值）。
     """
     if not answer:
         return 0.0
@@ -130,7 +136,7 @@ def _score_answer_relevance(question: str, answer: str) -> float:
         score = float(res.strip().split()[0])
         return min(max(score / 10.0, 0.0), 1.0)
     except Exception:
-        return 0.5
+        return None  # judge 失败，不用 0.5 偏向值
 
 
 def evaluate_one(record: dict, ask_fn=None) -> dict:
@@ -168,9 +174,9 @@ def evaluate_one(record: dict, ask_fn=None) -> dict:
         "id": record["id"],
         "question": question,
         "answer": answer[:200],
-        "context_precision": round(cp, 3),
-        "faithfulness": round(ff, 3),
-        "answer_relevance": round(ar, 3),
+        "context_precision": round(cp, 3) if cp is not None else None,
+        "faithfulness":       round(ff, 3) if ff is not None else None,
+        "answer_relevance":   round(ar, 3) if ar is not None else None,
         "latency_ms": latency_ms,
         "sources": sources[:5],
     }
@@ -207,9 +213,10 @@ def run_eval(n: int | None = None, output_path: str | None = None) -> dict:
         r = evaluate_one(rec)
         results.append(r)
         if "error" not in r:
-            print(f"       CP={r['context_precision']:.3f}  "
-                  f"FF={r['faithfulness']:.3f}  "
-                  f"AR={r['answer_relevance']:.3f}  "
+            def _fmt(v): return f"{v:.3f}" if v is not None else "N/A"
+            print(f"       CP={_fmt(r['context_precision'])}  "
+                  f"FF={_fmt(r['faithfulness'])}  "
+                  f"AR={_fmt(r['answer_relevance'])}  "
                   f"latency={r['latency_ms']}ms")
         else:
             print(f"       ERROR: {r['error']}")
@@ -220,30 +227,42 @@ def run_eval(n: int | None = None, output_path: str | None = None) -> dict:
         print("\n  无有效结果，请检查错误。")
         return {}
 
-    def _avg(key: str) -> float:
-        vals = [r[key] for r in valid if not math.isnan(r.get(key, float("nan")))]
-        return sum(vals) / len(vals) if vals else float("nan")
+    def _avg(key: str) -> float | None:
+        vals = [r[key] for r in valid if r.get(key) is not None]
+        return sum(vals) / len(vals) if vals else None
 
     avg_cp = _avg("context_precision")
     avg_ff = _avg("faithfulness")
     avg_ar = _avg("answer_relevance")
 
+    n_cp_failed = sum(1 for r in valid if r.get("context_precision") is None)
+    n_ff_failed = sum(1 for r in valid if r.get("faithfulness") is None)
+    n_ar_failed = sum(1 for r in valid if r.get("answer_relevance") is None)
+
     summary = {
         "n_evaluated": len(valid),
-        "context_precision": round(avg_cp, 3),
-        "faithfulness": round(avg_ff, 3),
-        "answer_relevance": round(avg_ar, 3),
+        "n_judge_failed": {
+            "context_precision": n_cp_failed,
+            "faithfulness": n_ff_failed,
+            "answer_relevance": n_ar_failed,
+        },
+        "context_precision": round(avg_cp, 3) if avg_cp is not None else None,
+        "faithfulness":       round(avg_ff, 3) if avg_ff is not None else None,
+        "answer_relevance":   round(avg_ar, 3) if avg_ar is not None else None,
         "details": results,
     }
 
     # 输出三维分表
     print(f"\n{'='*60}")
-    print(f"  三维分表（n={len(valid)}）")
+    print(f"  三维分表（n={len(valid)}，Judge失败：CP={n_cp_failed} FF={n_ff_failed} AR={n_ar_failed}）")
     print(f"{'='*60}")
     print(f"  {'指标':<22}  {'均值':>8}  {'红线':>8}  {'状态':>8}")
     print(f"  {'-'*50}")
 
     def _line(name, val, threshold, diag_key):
+        if val is None:
+            print(f"  {name:<22}  {'N/A':>8}  {threshold:>8.2f}  {'[SKIP]':>8}")
+            return
         status = "[PASS]" if val >= threshold else "[FAIL]"
         diag = f"\n    --> {DIAGNOSIS[diag_key]}" if val < threshold else ""
         print(f"  {name:<22}  {val:>8.3f}  {threshold:>8.2f}  {status:>8}{diag}")
@@ -252,7 +271,10 @@ def run_eval(n: int | None = None, output_path: str | None = None) -> dict:
     _line("Faithfulness",       avg_ff, THRESHOLD_FAITHFULNESS,       "faithfulness")
     _line("Answer Relevance",   avg_ar, 0.0,                          "answer_relevance")
 
-    overall_pass = avg_ff >= THRESHOLD_FAITHFULNESS and avg_cp >= THRESHOLD_CONTEXT_PRECISION
+    overall_pass = (
+        avg_ff is not None and avg_ff >= THRESHOLD_FAITHFULNESS and
+        avg_cp is not None and avg_cp >= THRESHOLD_CONTEXT_PRECISION
+    )
     print(f"\n{'='*60}")
     print(f"  D3: {'PASS' if overall_pass else 'FAIL（见上方整改建议）'}")
     print(f"{'='*60}\n")

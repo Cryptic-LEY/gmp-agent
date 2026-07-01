@@ -213,6 +213,9 @@ def _format_context(docs: list[DocChunk]) -> str:
                 # 缺陷清单/检查指南：明确标注类型，让 LLM 知道这不是法规条文
                 section = d.title if d.title else ''
                 parts.append(f"【参考文档 {section} | 来源：{source_name} | {d.id}】\n{d.content}")
+        elif d.doc_type == 'experience':
+            # 历史好案例：低权重辅助参考，严禁用作法规引用依据（spec C6）
+            parts.append(f"【历史参考经验（仅供参考，非法规依据，勿作条款引用）】\n{d.content}")
         else:
             parts.append(f"【教材知识点 {d.id}】{d.title}：{d.content or ''}")
     return '\n\n'.join(parts)

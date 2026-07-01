@@ -192,10 +192,9 @@ def ask_agent(
                 })
                 continue
 
-            # 自动注入 user_id（工具 schema 声明了 user_id 属性时补充，LLM 不自填时兜底）
+            # 强制注入 user_id：覆盖 LLM 可能主动填写的错误 user_id（防身份伪造）
             if user_id and "user_id" in t.parameters.get("properties", {}):
-                if "user_id" not in args:
-                    args = {**args, "user_id": user_id}
+                args = {**args, "user_id": user_id}
 
             # F6：HITL 闸门（sensitive 工具执行前检查授权，绑定 tool_name+args_hash+user_id）
             if t.level == "sensitive" and HITL_ENABLED:
@@ -204,7 +203,7 @@ def ask_agent(
                     for aid in pre_approved
                 )
                 if not already_ok:
-                    approval_id = request_approval(name, args)
+                    approval_id = request_approval(name, args, user_id=user_id)
                     return {
                         "hitl_pending": True,
                         "approval_id": approval_id,

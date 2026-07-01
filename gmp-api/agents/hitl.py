@@ -99,11 +99,11 @@ def is_approved_for(
 
 def approve(approval_id: str) -> bool:
     """放行指定审批请求（绑定 tool_name + args_hash + user_id + ts）。
-    成功返回 True；ID 不存在返回 False。"""
+    成功返回 True；ID 不存在或已审批返回 False。
+    审批后从 _pending 删除，防止重复 approve 同一 ID（"复活"攻击）。"""
     if approval_id not in _pending:
         return False
-    rec = _pending[approval_id]
-    rec["status"] = "approved"
+    rec = _pending.pop(approval_id)     # pop：删除，防止重复 approve
     _approved[approval_id] = {
         "tool_name": rec["tool_name"],
         "args_hash": rec.get("args_hash", ""),
