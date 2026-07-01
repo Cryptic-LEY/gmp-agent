@@ -82,6 +82,7 @@ def _build_generate_messages(
     history: list[dict] | None, edu_level: str | None,
     profile_hint: str = "",
     summary: str = "",
+    negatives_hint: str = "",
 ) -> list[dict]:
     """构造 generate 步骤的 LLM 消息列表（供流式和非流式共用）。"""
     edu_hint = ""
@@ -90,12 +91,13 @@ def _build_generate_messages(
     elif edu_level == "本科":
         edu_hint = "可适当引用ICH指南和法规原文，分析背后的质量管理原理。"
 
-    edu_note      = f"\n{edu_hint}" if edu_hint else ""
-    profile_note  = f"\n学生画像：{profile_hint}" if profile_hint else ""
-    summary_note  = f"\n近期话题摘要：{summary}" if summary else ""
+    edu_note       = f"\n{edu_hint}" if edu_hint else ""
+    profile_note   = f"\n学生画像：{profile_hint}" if profile_hint else ""
+    summary_note   = f"\n近期话题摘要：{summary}" if summary else ""
+    negatives_note = f"\n{negatives_hint}" if negatives_hint else ""
 
     system_prompt = (
-        f"你是GMP法规检索助手{edu_note}{profile_note}{summary_note}，"
+        f"你是GMP法规检索助手{edu_note}{profile_note}{summary_note}{negatives_note}，"
         "根据以下参考资料回答学生问题。\n\n"
         "参考资料中的法规条文格式为：\n"
         "  【法规条文 第X条 | 来源：来源名 | REG-ID】\n"
@@ -231,12 +233,25 @@ def node_generate(state: TutorState) -> dict:
     ordered_docs = reorder_for_llm(compressed_docs)
     context = _format_context(ordered_docs)
 
+    neg_hint = ""
+    try:
+        from eval.error_book import get_few_shot_negatives
+        negatives = get_few_shot_negatives(question, n=3)
+        if negatives:
+            neg_hint = "\n注意避免以下已知错误模式：\n" + "\n".join(
+                f"- 错误示例（勿照抄）：{n['bad_answer'][:80]}（原因：{n['reason'][:50]}）"
+                for n in negatives
+            )
+    except Exception:
+        pass
+
     llm_messages = _build_generate_messages(
         context, question,
         history=None,  # history already in state["messages"]
         edu_level=state.get("edu_level"),
         profile_hint=state.get("profile_hint", ""),
         summary=state.get("summary", ""),
+        negatives_hint=neg_hint,
     )
     # Replace history placeholder: inject state messages (skipping last HumanMessage)
     # _build_generate_messages already adds edu/profile/summary to system prompt;
@@ -442,7 +457,7 @@ def ask_tutor(
     # 语义缓存前置检查（B5）
     if SEMANTIC_CACHE_ENABLED and query_vec:
         from cache.semantic_cache import get_cache
-        cached = get_cache().get(query_vec, edu_level)
+        cached = get_cache().get(query_vec, edu_level, user_id)
         if cached:
             return cached
 
@@ -474,7 +489,7 @@ def ask_tutor(
     # 写入语义缓存
     if SEMANTIC_CACHE_ENABLED and query_vec:
         from cache.semantic_cache import get_cache
-        get_cache().put(query_vec, edu_level, answer_result)
+        get_cache().put(query_vec, edu_level, answer_result, user_id)
 
     # ── 四层记忆：异步实体抽取 + 命中率监控 ──────────────────────────────────
     if user_id and MEMORY_ENABLED:
@@ -482,6 +497,16 @@ def ask_tutor(
             try:
                 from memory.profile import extract_entities_async
                 extract_entities_async(question, result["final_answer"], user_id)
+            except Exception:
+                pass
+        else:
+            try:
+                from memory.profile import upsert_profile
+                patch: dict = {}
+                if edu_level:
+                    patch["edu_level"] = edu_level
+                if patch:
+                    upsert_profile(user_id, patch)
             except Exception:
                 pass
         try:
@@ -547,7 +572,7 @@ def ask_tutor_stream(
         except Exception:
             pass
         if query_vec:
-            cached = get_cache().get(query_vec, edu_level)
+            cached = get_cache().get(query_vec, edu_level, user_id)
             if cached:
                 answer = cached.get("answer", "")
                 for i in range(0, len(answer), 8):
@@ -568,9 +593,21 @@ def ask_tutor_stream(
     context = _format_context(ordered_docs)
 
     # 2. generate（缓冲，critique前不能流出）
+    neg_hint = ""
+    try:
+        from eval.error_book import get_few_shot_negatives
+        negatives = get_few_shot_negatives(question, n=3)
+        if negatives:
+            neg_hint = "\n注意避免以下已知错误模式：\n" + "\n".join(
+                f"- 错误示例（勿照抄）：{n['bad_answer'][:80]}（原因：{n['reason'][:50]}）"
+                for n in negatives
+            )
+    except Exception:
+        pass
+
     gen_messages = _build_generate_messages(
         context, question, filtered_history, edu_level,
-        profile_hint=profile_hint, summary=summary,
+        profile_hint=profile_hint, summary=summary, negatives_hint=neg_hint,
     )
     draft = ""
     try:
@@ -643,7 +680,7 @@ def ask_tutor_stream(
             "answer": final_answer,
             "sources": sources,
             "critic_triggered": critic_triggered,
-        })
+        }, user_id)
 
     # 6. done信号
     latency_ms = int((time.monotonic() - t0) * 1000)
@@ -657,6 +694,16 @@ def ask_tutor_stream(
             try:
                 from memory.profile import extract_entities_async
                 extract_entities_async(question, final_answer, user_id)
+            except Exception:
+                pass
+        else:
+            try:
+                from memory.profile import upsert_profile
+                patch: dict = {}
+                if edu_level:
+                    patch["edu_level"] = edu_level
+                if patch:
+                    upsert_profile(user_id, patch)
             except Exception:
                 pass
         try:

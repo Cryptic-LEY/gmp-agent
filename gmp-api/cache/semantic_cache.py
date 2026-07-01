@@ -4,13 +4,15 @@
 
 进程内 LRU 向量缓存：
   - 以 cosine 相似度做命中判断（threshold 可调）
-  - edu_level 作为命名空间（不同层次不共享缓存条目）
+  - edu_level + user_id 双维命名空间（不同用户/层次不共享缓存条目）
+  - TTL：超过 SEMANTIC_CACHE_TTL 秒的条目在读取时被跳过
   - LRU 驱逐：超出 max_size 时删除最久未用条目
   - invalidate(reg_ids=None)：无参=全清；传 reg_ids=清涉及该条规的缓存
   - 进程级单例 _cache，由 get_cache() 暴露；与 vector_index.rebuild() 联动
 """
 from __future__ import annotations
 
+import time
 import threading
 from collections import OrderedDict
 from typing import Any
@@ -21,6 +23,7 @@ from config import (
     SEMANTIC_CACHE_ENABLED,
     SEMANTIC_CACHE_MAX,
     SEMANTIC_CACHE_SIM_THRESHOLD,
+    SEMANTIC_CACHE_TTL,
 )
 
 
@@ -41,14 +44,17 @@ class SemanticCache:
       - move_to_end() on hit = 更新最近使用时间
     """
 
-    def __init__(self, max_size: int = 2000, threshold: float = 0.92) -> None:
-        self._max       = max_size
-        self._thr       = threshold
-        self._store: OrderedDict[int, tuple[np.ndarray, str | None, dict]] = OrderedDict()
-        self._next_id   = 0
-        self._hits      = 0
-        self._misses    = 0
-        self._lock      = threading.Lock()
+    def __init__(self, max_size: int = 2000, threshold: float = 0.92,
+                 ttl: int = 3600) -> None:
+        self._max  = max_size
+        self._thr  = threshold
+        self._ttl  = ttl
+        # 存储格式：(norm_vec, edu_level, user_id, result, created_at)
+        self._store: OrderedDict[int, tuple[np.ndarray, str | None, str | None, dict, float]] = OrderedDict()
+        self._next_id = 0
+        self._hits    = 0
+        self._misses  = 0
+        self._lock    = threading.Lock()
 
     # ── 公开 API ──────────────────────────────────────────────────────────────
 
@@ -56,10 +62,11 @@ class SemanticCache:
         self,
         query_vec: list[float],
         edu_level: str | None = None,
+        user_id: str | None = None,
     ) -> dict | None:
         """
         查询缓存。命中返回 result dict，未命中返回 None。
-        批量 dot product 比较所有同 edu_level 条目。
+        按 edu_level + user_id 双维命名空间过滤，跳过 TTL 过期条目。
         """
         with self._lock:
             if not self._store:
@@ -67,16 +74,19 @@ class SemanticCache:
                 return None
 
             q = _normalize(query_vec)
+            now = time.time()
 
-            # 过滤同 edu_level 的条目
             matching_ids: list[int] = []
             matching_vecs: list[np.ndarray] = []
             matching_results: list[dict] = []
-            for eid, (v, edu, r) in self._store.items():
-                if edu == edu_level:
-                    matching_ids.append(eid)
-                    matching_vecs.append(v)
-                    matching_results.append(r)
+            for eid, (v, edu, uid, r, ts) in self._store.items():
+                if edu != edu_level or uid != user_id:
+                    continue
+                if now - ts > self._ttl:      # TTL 过期跳过
+                    continue
+                matching_ids.append(eid)
+                matching_vecs.append(v)
+                matching_results.append(r)
 
             if not matching_ids:
                 self._misses += 1
@@ -100,6 +110,7 @@ class SemanticCache:
         query_vec: list[float],
         edu_level: str | None,
         result: dict,
+        user_id: str | None = None,
     ) -> None:
         """写入缓存条目；超出 max_size 驱逐最旧 LRU 条目。"""
         with self._lock:
@@ -109,7 +120,7 @@ class SemanticCache:
             q   = _normalize(query_vec)
             eid = self._next_id
             self._next_id += 1
-            self._store[eid] = (q, edu_level, result)
+            self._store[eid] = (q, edu_level, user_id, result, time.time())
 
     def invalidate(self, reg_ids: list[str] | None = None) -> None:
         """
@@ -125,7 +136,7 @@ class SemanticCache:
             reg_set = set(reg_ids)
             to_del = [
                 eid
-                for eid, (_, _, r) in self._store.items()
+                for eid, (_v, _edu, _uid, r, _ts) in self._store.items()
                 if reg_set & set(r.get("sources", []))
             ]
             for eid in to_del:
@@ -147,7 +158,8 @@ class SemanticCache:
 
 # ── 进程级单例 ────────────────────────────────────────────────────────────────
 
-_cache = SemanticCache(max_size=SEMANTIC_CACHE_MAX, threshold=SEMANTIC_CACHE_SIM_THRESHOLD)
+_cache = SemanticCache(max_size=SEMANTIC_CACHE_MAX, threshold=SEMANTIC_CACHE_SIM_THRESHOLD,
+                       ttl=SEMANTIC_CACHE_TTL)
 
 
 def get_cache() -> SemanticCache:

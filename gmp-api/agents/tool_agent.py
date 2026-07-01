@@ -108,6 +108,11 @@ def ask_agent(
         HITL 挂起: {"hitl_pending": True, "approval_id": str, "answer": "", ...}
         预算耗尽: {"answer": "[已达上限]...", "tool_calls_log": [...], "steps": int}
     """
+    if not TOOLS_ENABLED:
+        from agents.tutor import ask_tutor
+        r = ask_tutor(question, user_id=user_id)
+        return {"answer": r["answer"], "tool_calls_log": [], "steps": 1}
+
     tool_schemas = schemas()
     _call_llm = llm_fn if llm_fn else _llm_with_tools
 
@@ -186,6 +191,11 @@ def ask_agent(
                     "content": f"[NotFound] 工具 {name!r} 未注册，请换用其他工具。",
                 })
                 continue
+
+            # 自动注入 user_id（工具 schema 声明了 user_id 属性时补充，LLM 不自填时兜底）
+            if user_id and "user_id" in t.parameters.get("properties", {}):
+                if "user_id" not in args:
+                    args = {**args, "user_id": user_id}
 
             # F6：HITL 闸门（sensitive 工具执行前检查授权，绑定 tool_name 防越权）
             if t.level == "sensitive" and HITL_ENABLED:

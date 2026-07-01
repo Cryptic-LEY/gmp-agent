@@ -52,6 +52,7 @@ class AgentRequest(BaseModel):
     edu_level: str | None = None          # '专科' | '本科'；透传给 ask_tutor（E8 向后兼容）
     history: list[dict] | None = None     # 多轮历史；透传给 ask_tutor
     authorized: bool = True               # 前端通过登态/HITL 传入；False 时 sensitive 工具被拦截
+    pre_approved: list[str] | None = None # HITL 审批后前端携带的 approval_id 列表
 
 
 class AgentResponse(BaseModel):
@@ -107,7 +108,8 @@ def chat_agent(req: AgentRequest):
     intent = route_intent(req.question)
 
     if intent == "agent":
-        result = ask_agent(req.question, user_id=req.user_id, authorized=req.authorized)
+        result = ask_agent(req.question, user_id=req.user_id, authorized=req.authorized,
+                           pre_approved=set(req.pre_approved) if req.pre_approved else None)
         return AgentResponse(
             intent="agent",
             answer=result.get("answer", ""),

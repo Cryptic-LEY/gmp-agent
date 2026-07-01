@@ -98,10 +98,20 @@ class VectorIndex:
             self._chunk_id_to_label[chunk_id] = lbl
             self._reg_to_chunks[reg_id].append(chunk_id)
 
-    def get_record(self, chunk_id: str) -> dict | None:
-        """按 chunk_id 取记录（Phase-2 下传 reg_id 不可用，会返回 None）。"""
-        lbl = self._chunk_id_to_label.get(chunk_id)
-        return self._records[lbl] if lbl is not None else None
+    def get_record(self, id_: str) -> dict | None:
+        """
+        按 chunk_id 或 reg_id 取记录。
+        Phase-1：id_ == chunk_id == reg_id，直接命中。
+        Phase-2：id_ 可能是 reg_id（BM25/图扩展场景），fallback 取该 reg_id 首块。
+        """
+        lbl = self._chunk_id_to_label.get(id_)
+        if lbl is not None:
+            return self._records[lbl]
+        chunk_ids = self._reg_to_chunks.get(id_, [])
+        if chunk_ids:
+            lbl = self._chunk_id_to_label.get(chunk_ids[0])
+            return self._records[lbl] if lbl is not None else None
+        return None
 
     def similarity(self, query_vec, ids: list[str]) -> dict[str, float]:
         """
