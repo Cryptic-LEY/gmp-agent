@@ -24,6 +24,7 @@ from config import (
     RAG_RERANK_ENABLED, RAG_RERANK_TOP_BEFORE,
     RAG_PARALLEL_RETRIEVE,
     RAG_FUSION_VEC_WEIGHT, RAG_FUSION_BM25_WEIGHT,
+    RAG_HYDE_ENABLED,
 )
 
 
@@ -174,7 +175,12 @@ def retrieve(question: str, edu_level: str | None = None,
     """
     from rag.vector_index import get_index
 
-    if query_vec is None:
+    if RAG_HYDE_ENABLED:
+        # HyDE 开启时，无论调用方是否传入 query_vec，都用 HyDE 向量做检索；
+        # 调用方传入的 query_vec 仅用于缓存 key，不传给检索路径。
+        from rag.hyde import hyde_embed
+        query_vec = hyde_embed(question) or query_vec or embed_query(question)
+    elif query_vec is None:
         from rag.hyde import hyde_embed
         query_vec = hyde_embed(question) or embed_query(question)
     idx = get_index()

@@ -83,8 +83,17 @@ def _build_generate_messages(
     profile_hint: str = "",
     summary: str = "",
     negatives_hint: str = "",
+    current_state_hint: str = "",
 ) -> list[dict]:
     """构造 generate 步骤的 LLM 消息列表（供流式和非流式共用）。"""
+    from memory.context_observer import ContextObserver
+    obs = ContextObserver()
+    obs.record("profile_hint", profile_hint)
+    obs.record("summary", summary)
+    obs.record("current_state", current_state_hint)
+    obs.record("negatives_hint", negatives_hint)
+    obs.check()   # 超出预算时打 WARNING，不截断
+
     edu_hint = ""
     if edu_level == "专科":
         edu_hint = "用简洁易懂的语言回答，避免过多理论推导，结合实际操作场景举例。"
@@ -95,9 +104,10 @@ def _build_generate_messages(
     profile_note   = f"\n学生画像：{profile_hint}" if profile_hint else ""
     summary_note   = f"\n近期话题摘要：{summary}" if summary else ""
     negatives_note = f"\n{negatives_hint}" if negatives_hint else ""
+    cs_note        = f"\n{current_state_hint}" if current_state_hint else ""
 
     system_prompt = (
-        f"你是GMP法规检索助手{edu_note}{profile_note}{summary_note}{negatives_note}，"
+        f"你是GMP法规检索助手{edu_note}{profile_note}{summary_note}{cs_note}{negatives_note}，"
         "根据以下参考资料回答学生问题。\n\n"
         "参考资料中的法规条文格式为：\n"
         "  【法规条文 第X条 | 来源：来源名 | REG-ID】\n"
@@ -137,6 +147,7 @@ class TutorState(TypedDict):
     user_id: str | None                # 用户 ID（四层记忆启用键）
     profile_hint: str                  # 档案卡一行注入（空字符串=无画像）
     summary: str                       # 近期对话摘要（空字符串=未触发）
+    current_state: dict                # 结构化工作记忆（话题/已问/待确认）
 
 
 # ── 上下文格式化 ───────────────────────────────────────────────────────────────
@@ -245,6 +256,14 @@ def node_generate(state: TutorState) -> dict:
     except Exception:
         pass
 
+    cs = state.get("current_state") or {}
+    cs_hint = ""
+    try:
+        from memory.summary import format_current_state
+        cs_hint = format_current_state(cs)
+    except Exception:
+        pass
+
     llm_messages = _build_generate_messages(
         context, question,
         history=None,  # history already in state["messages"]
@@ -252,6 +271,7 @@ def node_generate(state: TutorState) -> dict:
         profile_hint=state.get("profile_hint", ""),
         summary=state.get("summary", ""),
         negatives_hint=neg_hint,
+        current_state_hint=cs_hint,
     )
     # Replace history placeholder: inject state messages (skipping last HumanMessage)
     # _build_generate_messages already adds edu/profile/summary to system prompt;
@@ -419,21 +439,25 @@ def ask_tutor(
     Returns:
       {"answer": str, "sources": list[str], "critic_triggered": bool}
     """
-    # ── 四层记忆：用户档案卡 + 语义级历史过滤 + 摘要 ─────────────────────────
+    # ── 四层记忆：用户档案卡 + 语义级历史过滤 + 摘要（持久化） + current_state ──
     profile_hint = ""
     summary = ""
+    current_state: dict = {}
     filtered_history = list(history or [])
 
     if user_id and MEMORY_ENABLED:
         try:
             from memory.profile import get_profile, get_profile_hint
-            from memory.summary import build_window_and_summary
+            from memory.summary import build_window_and_summary, load_summary, build_current_state
             profile = get_profile(user_id)
             profile_hint = get_profile_hint(profile)
-            # 语义过滤 + 摘要（不调 DashScope，mock_llm=None → 生产用）
+            # 方案A：跨会话摘要从 DB 加载，不依赖前端传参
+            stored_summary = load_summary(user_id)
             filtered_history, summary = build_window_and_summary(
-                filtered_history, mock_llm=None
+                filtered_history, existing_summary=stored_summary, mock_llm=None
             )
+            # current_state 工作记忆（话题/已问/待确认）
+            current_state = build_current_state(filtered_history, question)
         except Exception:
             pass  # 记忆不可用时静默降级
 
@@ -473,6 +497,7 @@ def ask_tutor(
         "user_id": user_id,
         "profile_hint": profile_hint,
         "summary": summary,
+        "current_state": current_state,
     }
     t0 = time.monotonic()
     result = tutor_graph.invoke(initial_state)
@@ -490,6 +515,29 @@ def ask_tutor(
     if SEMANTIC_CACHE_ENABLED and query_vec:
         from cache.semantic_cache import get_cache
         get_cache().put(query_vec, edu_level, answer_result, user_id)
+
+    # ── 四层记忆：持久化摘要 + 好 case 经验回流 ──────────────────────────────
+    if user_id and MEMORY_ENABLED:
+        # C1 方案A：把更新后的 summary 写回 DB（跨会话持久化）
+        if summary:
+            try:
+                from memory.summary import save_summary
+                save_summary(user_id, summary)
+            except Exception:
+                pass
+        # C2：好 case 异步回流到经验索引（critic 未触发 = 高质量回答）
+        if not critic_triggered:
+            try:
+                import threading, uuid
+                from memory.experience import add_experience
+                exp_id = uuid.uuid4().hex[:12]
+                threading.Thread(
+                    target=add_experience,
+                    args=(exp_id, question, result["final_answer"], sources),
+                    daemon=True,
+                ).start()
+            except Exception:
+                pass
 
     # ── 四层记忆：异步实体抽取 + 命中率监控 ──────────────────────────────────
     if user_id and MEMORY_ENABLED:
@@ -549,16 +597,19 @@ def ask_tutor_stream(
     # ── 四层记忆：档案卡 + 语义过滤 + 摘要 ────────────────────────────────────
     profile_hint = ""
     summary = ""
+    current_state_stream: dict = {}
     filtered_history = list(history or [])
     if user_id and MEMORY_ENABLED:
         try:
             from memory.profile import get_profile, get_profile_hint
-            from memory.summary import build_window_and_summary
+            from memory.summary import build_window_and_summary, load_summary, build_current_state
             profile = get_profile(user_id)
             profile_hint = get_profile_hint(profile)
+            stored_summary = load_summary(user_id)
             filtered_history, summary = build_window_and_summary(
-                filtered_history, mock_llm=None
+                filtered_history, existing_summary=stored_summary, mock_llm=None
             )
+            current_state_stream = build_current_state(filtered_history, question)
         except Exception:
             pass
 
@@ -605,9 +656,17 @@ def ask_tutor_stream(
     except Exception:
         pass
 
+    cs_hint_stream = ""
+    try:
+        from memory.summary import format_current_state
+        cs_hint_stream = format_current_state(current_state_stream)
+    except Exception:
+        pass
+
     gen_messages = _build_generate_messages(
         context, question, filtered_history, edu_level,
         profile_hint=profile_hint, summary=summary, negatives_hint=neg_hint,
+        current_state_hint=cs_hint_stream,
     )
     draft = ""
     try:
@@ -688,8 +747,26 @@ def ask_tutor_stream(
         f'data: {json.dumps({"done": True, "sources": sources, "critic_triggered": critic_triggered}, ensure_ascii=False)}\n\n'
     )
 
-    # 7. 四层记忆：异步实体抽取 + 命中率监控
+    # 7. 四层记忆：持久化摘要 + 好 case 经验回流 + 异步实体抽取 + 命中率监控
     if user_id and MEMORY_ENABLED:
+        if summary:
+            try:
+                from memory.summary import save_summary
+                save_summary(user_id, summary)
+            except Exception:
+                pass
+        if not critic_triggered:
+            try:
+                import threading, uuid
+                from memory.experience import add_experience
+                exp_id = uuid.uuid4().hex[:12]
+                threading.Thread(
+                    target=add_experience,
+                    args=(exp_id, question, final_answer, sources),
+                    daemon=True,
+                ).start()
+            except Exception:
+                pass
         if PROFILE_ASYNC:
             try:
                 from memory.profile import extract_entities_async

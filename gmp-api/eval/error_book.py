@@ -121,3 +121,10 @@ try:
     _ensure_table()
 except Exception:
     pass
+
+
+if __name__ == "__main__":
+    import sys
+    days = int(sys.argv[1]) if len(sys.argv) > 1 else 7
+    n = aggregate_from_query_log(days)
+    print(f"[error_book] 从 query_log 导入 {n} 条新记录（lookback={days}d）")

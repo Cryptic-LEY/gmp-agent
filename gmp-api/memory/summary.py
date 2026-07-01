@@ -1,9 +1,18 @@
-"""近期摘要 + 工作记忆（层①③）。"""
+"""近期摘要 + 工作记忆（层①③）。
+
+方案A：摘要跨会话持久化到 MySQL user_session_summary 表，
+进程重启或新会话不会丢失。
+"""
 from __future__ import annotations
 
 import re
 
-from config import HISTORY_TURNS, SUMMARY_TRIGGER_TURNS
+import pymysql
+
+from config import (
+    HISTORY_TURNS, SUMMARY_TRIGGER_TURNS,
+    MYSQL_HOST, MYSQL_PORT, MYSQL_USER, MYSQL_PASSWORD, MYSQL_DATABASE,
+)
 
 # 纯闲聊：仅问候/致谢/简短答复
 _SMALL_TALK_RE = re.compile(
@@ -96,6 +105,113 @@ def incremental_summary(
     )
     resp.raise_for_status()
     return resp.json()["choices"][0]["message"]["content"].strip()
+
+
+# ── 摘要 DB 持久化（方案A：跨会话不丢失） ────────────────────────────────────
+
+def _get_conn():
+    return pymysql.connect(
+        host=MYSQL_HOST, port=MYSQL_PORT,
+        user=MYSQL_USER, password=MYSQL_PASSWORD,
+        database=MYSQL_DATABASE, autocommit=True,
+    )
+
+
+def _ensure_summary_table() -> None:
+    with _get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS user_session_summary (
+                    user_id    VARCHAR(191) NOT NULL PRIMARY KEY,
+                    summary    TEXT,
+                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                        ON UPDATE CURRENT_TIMESTAMP
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+            """)
+
+
+def load_summary(user_id: str) -> str:
+    """从 MySQL 加载用户最近摘要；表不存在或无记录时返回空字符串。"""
+    try:
+        with _get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT summary FROM user_session_summary WHERE user_id = %s",
+                    (user_id,),
+                )
+                row = cur.fetchone()
+                return row[0] or "" if row else ""
+    except Exception:
+        return ""
+
+
+def save_summary(user_id: str, summary: str) -> None:
+    """持久化摘要（UPSERT）；失败静默降级。"""
+    if not summary:
+        return
+    try:
+        with _get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO user_session_summary (user_id, summary)
+                    VALUES (%s, %s)
+                    ON DUPLICATE KEY UPDATE summary = VALUES(summary)
+                """, (user_id, summary))
+    except Exception:
+        pass
+
+
+# 模块加载时幂等建表
+try:
+    _ensure_summary_table()
+except Exception:
+    pass
+
+
+# ── current_state 结构化工作记忆 ──────────────────────────────────────────────
+
+_TOPIC_EXTRACT_RE = re.compile(
+    r'(?:关于|请问|什么是|如何|怎样|GMP)[：:：]?\s*([^，。？\n]{4,30})',
+)
+
+
+def build_current_state(history: list[dict], question: str) -> dict:
+    """
+    从近期对话 + 当前问题提取结构化工作记忆：
+      topic    - 当前话题（从 question 中提取或用最后一个 user 消息话题）
+      asked    - 已确认的问题列表（最近 user messages）
+      pending  - 待确认项（尚未出现 assistant 回答的 user 问题）
+
+    返回的 dict 键值都是简短字符串，供 format_current_state 压缩后注入 prompt。
+    """
+    # 提取当前话题
+    m = _TOPIC_EXTRACT_RE.search(question)
+    topic = m.group(1).strip() if m else question[:30].strip()
+
+    # 从历史提取已问条目（user 消息，最近 3 条，截断 40 字）
+    asked: list[str] = []
+    for msg in history[-6:]:
+        if msg.get("role") == "user":
+            text = msg.get("content", "").strip()[:40]
+            if text and text not in asked:
+                asked.append(text)
+
+    # 待确认 = 当前问题（还没回答）
+    pending = [question[:40].strip()] if question.strip() else []
+
+    return {"topic": topic, "asked": asked[-3:], "pending": pending}
+
+
+def format_current_state(cs: dict) -> str:
+    """把 current_state dict 压成一行 prompt 注入文本（< 80 字）。"""
+    if not cs:
+        return ""
+    parts = [f"话题：{cs.get('topic', '')}"]
+    if cs.get("asked"):
+        parts.append("已问：" + "、".join(cs["asked"][-2:]))
+    if cs.get("pending"):
+        parts.append("当前：" + cs["pending"][0])
+    return "【工作记忆】" + "；".join(parts)
 
 
 def build_window_and_summary(
