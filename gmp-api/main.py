@@ -2,14 +2,19 @@
 GMP Agent FastAPI 后端
 运行方式：cd gmp-api && uvicorn main:app --reload --port 8001
 """
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from agents.tutor import ask_tutor, ask_tutor_stream
 from agents.tool_agent import ask_agent, route_intent
-from agents.hitl import approve as hitl_approve, get_pending as hitl_pending
+from agents.hitl import (
+    approve as hitl_approve,
+    get_pending as hitl_pending,
+    get_pending_owner as hitl_get_pending_owner,
+)
+from config import HITL_API_KEY
 from rag import vector_index
 
 app = FastAPI(title="GMP Agent API", version="0.1.0")
@@ -66,6 +71,7 @@ class AgentResponse(BaseModel):
 
 class ApproveRequest(BaseModel):
     approval_id: str
+    approver_user_id: str | None = None  # 请求方 user_id；与 pending 所有者不符时拒绝
 
 
 # ── 路由 ──────────────────────────────────────────────────────────────────────
@@ -131,15 +137,28 @@ def chat_agent(req: AgentRequest):
 
 # ── F6：HITL 审批接口 ─────────────────────────────────────────────────────────
 
-@app.get("/agent/pending")
+def _hitl_auth_dep(x_hitl_key: str = Header(default="")) -> None:
+    """若配置了 HITL_API_KEY，则要求请求头携带 X-Hitl-Key 且值一致。"""
+    if HITL_API_KEY and x_hitl_key != HITL_API_KEY:
+        raise HTTPException(status_code=403, detail="HITL 接口需要有效的 X-Hitl-Key 请求头")
+
+
+@app.get("/agent/pending", dependencies=[Depends(_hitl_auth_dep)])
 def agent_pending():
     """列出所有待审批的 sensitive 工具调用（供前端弹窗展示）。"""
     return {"pending": hitl_pending()}
 
 
-@app.post("/agent/approve")
+@app.post("/agent/approve", dependencies=[Depends(_hitl_auth_dep)])
 def agent_approve(req: ApproveRequest):
     """放行指定审批请求，允许 sensitive 工具继续执行。"""
+    # 所有权校验：pending 记录绑定了 user_id 时，approver 必须匹配
+    pending_owner = hitl_get_pending_owner(req.approval_id)
+    if pending_owner is not None and req.approver_user_id != pending_owner:
+        raise HTTPException(
+            status_code=403,
+            detail="approver_user_id 与审批请求所有者不匹配",
+        )
     ok = hitl_approve(req.approval_id)
     if not ok:
         raise HTTPException(status_code=404, detail=f"approval_id {req.approval_id!r} 不存在")

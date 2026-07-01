@@ -139,6 +139,7 @@ def test_b6_invalidate_by_reg_id():
     assert cache.get(v2, None) is not None  # REG-002 仍在
 
 
+@pytest.mark.integration
 def test_b6_rebuild_triggers_invalidation():
     """B6：vector_index.rebuild() 调用后缓存应清空（通过 invalidate_hook）。"""
     import rag.vector_index as vi

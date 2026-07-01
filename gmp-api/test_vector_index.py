@@ -8,6 +8,8 @@
 import json
 from pathlib import Path
 
+import pytest
+
 from rag.vector_index import VectorIndex, build_index
 from rag.retriever import _get_conn
 
@@ -52,6 +54,7 @@ def test_empty_index_returns_empty():
     assert VectorIndex(dim=4).search([1, 0, 0, 0], k=3) == []
 
 
+@pytest.mark.integration
 def test_build_from_mysql_indexes_existing_vectors():
     """读真库现有向量建索引，并用一条 reg_chunks 真实向量自查验证（只读、免费）。"""
     with _get_conn() as conn:

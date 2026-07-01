@@ -1,6 +1,19 @@
 # -*- coding: utf-8 -*-
 """D6 feedback 路由端到端测试：前端负反馈 → error_book 写入（不调 DashScope）。"""
+import socket
 import pytest
+
+pytestmark = pytest.mark.integration
+
+# MySQL 不可用时跳过整个模块（startup 事件会调 vector_index.rebuild()）
+try:
+    _s = socket.create_connection(("127.0.0.1", 3306), timeout=1)
+    _s.close()
+    del _s
+except OSError as _e:
+    pytest.skip(f"MySQL unavailable — integration tests skipped: {_e}",
+                allow_module_level=True)
+
 from fastapi.testclient import TestClient
 from main import app
 

@@ -16,6 +16,7 @@ def _get_conn():
         host=MYSQL_HOST, port=MYSQL_PORT,
         user=MYSQL_USER, password=MYSQL_PASSWORD,
         database=MYSQL_DATABASE, autocommit=True,
+        connect_timeout=2,
     )
 
 

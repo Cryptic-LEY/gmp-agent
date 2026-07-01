@@ -1,6 +1,19 @@
 # -*- coding: utf-8 -*-
-"""D6: 错题本闭环单元测试。"""
+"""D6: 错题本闭环单元测试（integration，需要 MySQL）。"""
+import socket
 import pytest
+
+pytestmark = pytest.mark.integration
+
+# MySQL 不可用时跳过整个模块（避免等待 TCP 超时）
+try:
+    _s = socket.create_connection(("127.0.0.1", 3306), timeout=1)
+    _s.close()
+    del _s
+except OSError as _e:
+    pytest.skip(f"MySQL unavailable — integration tests skipped: {_e}",
+                allow_module_level=True)
+
 from eval.error_book import add_error, get_recent_errors, get_few_shot_negatives
 
 

@@ -122,6 +122,12 @@ def get_pending() -> list[dict]:
     ]
 
 
+def get_pending_owner(approval_id: str) -> str | None:
+    """返回待审批请求绑定的 user_id（用于接口层所有权校验）；不存在则返回 None。"""
+    rec = _pending.get(approval_id)
+    return rec.get("user_id") if rec else None
+
+
 def reset() -> None:
     """清除所有状态（仅供测试使用）。"""
     _pending.clear()

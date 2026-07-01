@@ -31,6 +31,7 @@ def _cleanup_c1():
         pass
 
 
+@pytest.mark.integration
 def test_c1_upsert_overwrites_old_value():
     """C1: 先写 prefs.budget=5万，再写 8万，get_profile 只返回 8万（旧值不残留）。"""
     _cleanup_c1()
@@ -46,6 +47,7 @@ def test_c1_upsert_overwrites_old_value():
         _cleanup_c1()
 
 
+@pytest.mark.integration
 def test_c1_upsert_creates_if_not_exists():
     """C1 补充：用户不存在时 upsert 新建。"""
     _cleanup_c1()
@@ -59,6 +61,7 @@ def test_c1_upsert_creates_if_not_exists():
         _cleanup_c1()
 
 
+@pytest.mark.integration
 def test_c1_get_profile_empty_for_unknown_user():
     """C1 补充：未知 user_id 返回空 dict。"""
     from memory.profile import get_profile
@@ -293,6 +296,7 @@ def _cleanup_c7():
         pass
 
 
+@pytest.mark.integration
 def test_c7_log_memory_usage_writes_and_returns_rate():
     """C7: log_memory_usage 写入 memory_usage 表，get_hit_rate 可统计命中率。"""
     _cleanup_c7()

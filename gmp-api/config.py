@@ -99,6 +99,7 @@ GUARD_REPEAT_LIMIT = int(os.getenv("GUARD_REPEAT_LIMIT","3"))
 TOOL_TIMEOUT_SEC   = int(os.getenv("TOOL_TIMEOUT_SEC",  "15"))
 TOOL_RETRY_MAX     = int(os.getenv("TOOL_RETRY_MAX",    "3"))
 HITL_ENABLED       = os.getenv("HITL_ENABLED",       "true").lower() == "true"
+HITL_API_KEY       = os.getenv("HITL_API_KEY",       "")  # 若设置，/agent/pending|approve 需携带 X-Hitl-Key
 MCP_ENABLED        = os.getenv("MCP_ENABLED",        "false").lower() == "true"
 
 # ── 案例库目录（工业规程文件所在位置）─────────────────────────────────────────
