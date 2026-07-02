@@ -79,6 +79,29 @@ def test_precise_article_hard_indicator_hits():
     assert arts & {"十", "10"}, f"未命中第十条，召回的 article_num={arts}"
 
 
+def test_article_lookup_prefers_main_gmp_regulation():
+    """裸「GMP第十条」应消歧到主规范 REG-GMP2010-A010，而非 22 条 article_num='十' 里的
+    受托生产/附录等条款（此前 REG-COM-010 抢排第一污染答案）。"""
+    from rag.retriever import _article_lookup
+    with _get_conn() as conn:
+        rows = _article_lookup(conn, "GMP第十条规定了什么内容？")
+    ids = [r[0] for r in rows]
+    assert ids, "第十条应有命中"
+    assert "REG-GMP2010-A010" in ids, f"应命中主规范第十条，实际 {ids}"
+    assert all(i.startswith("REG-GMP2010-") for i in ids), \
+        f"裸 GMP 第X条应只返回主规范条款，实际混入 {ids}"
+
+
+def test_article_lookup_keeps_appendix_when_named():
+    """问题点名附录（无菌药品）时，附录第十条应在候选里，不被主规范消歧掉。"""
+    from rag.retriever import _article_lookup
+    with _get_conn() as conn:
+        rows = _article_lookup(conn, "无菌药品附录第十条对悬浮粒子监测的要求")
+    ids = [r[0] for r in rows]
+    assert any(i.startswith("REG-APP-") for i in ids), \
+        f"点名附录时应保留附录条款，实际 {ids}"
+
+
 def test_falls_back_to_keyword_when_index_unavailable():
     """A7：索引不可用时降级到关键词检索，不崩、仍返回 DocChunk。"""
     saved = vi.get_index()

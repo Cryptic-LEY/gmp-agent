@@ -71,9 +71,20 @@ def embed_query(text: str) -> list[float] | None:
 _ARTICLE_RE = re.compile(r'第([一二三四五六七八九十百千零〇\d]+)条')
 ARTICLE_HIT_CAP = 3   # 第X条直查最多置顶几条（多文档共享条号时按相关度取前几）
 
+# 附录/专项法规提示词：问题点名这些时，第X条可能指附录条款而非主规范
+_APPENDIX_HINT_RE = re.compile(
+    r'附录|无菌|生物制品|血液制品|中药|饮片|临床试验|疫苗|医用氧|放射|'
+    r'生化|计算机化|取样|确认与验证|细胞|基因|委托|受托'
+)
+
 
 def _article_lookup(conn, question: str) -> list[tuple]:
-    """硬指标：从问题里抽「第X条」直接按 article_num 精确命中（BM25 死磕硬指标场景）。"""
+    """硬指标：从问题里抽「第X条」直接按 article_num 精确命中（BM25 死磕硬指标场景）。
+
+    消歧：同一 article_num（如「十」）在 22+ 部法规/附录里都存在。裸「GMP第X条」
+    默认指主规范 REG-GMP2010-*；只有问题点名附录/专项（无菌/生物制品/受托生产…）时
+    才放开全部候选，交给下游向量相似度排序。否则「第十条」会被受托生产法规(十)等抢排。
+    """
     nums = _ARTICLE_RE.findall(question)
     if not nums:
         return []
@@ -83,7 +94,12 @@ def _article_lookup(conn, question: str) -> list[tuple]:
         f"SELECT reg_id, article_num, content FROM reg_library WHERE article_num IN ({ph})",
         nums,
     )
-    return cur.fetchall()
+    rows = cur.fetchall()
+    if not _APPENDIX_HINT_RE.search(question):
+        main = [r for r in rows if r[0].startswith('REG-GMP2010-')]
+        if main:
+            return main
+    return rows
 
 
 def _fulltext_search(conn, question: str, top_k: int) -> list[str]:
