@@ -18,8 +18,8 @@ from tools.errors import (
 
 # 不可重试类：资源不存在 / 无权限 / 参数错误（需模型自修正，非瞬时故障）
 _NON_RETRYABLE = (NotFoundError, ForbiddenError, InvalidArgsError)
-# 可重试类：上游 5xx 与超时（瞬时故障，退避后可能恢复）—— spec F4
-_RETRYABLE = (UpstreamError, ToolTimeoutError)
+# 可重试类分别处理：UpstreamError 始终重试；ToolTimeoutError 仅在 retry_on_timeout 时重试
+# （非幂等工具超时重试会因残留线程造成重复副作用，见 run_with_retry）—— spec F4
 _BACKOFF_SEC = [1, 2, 4]          # F4：指数退避序列
 
 
@@ -40,16 +40,20 @@ def run_with_retry(
     args: dict,
     max_retries: int | None = None,
     on_retry: Callable[[int, str], None] | None = None,
+    retry_on_timeout: bool = True,
 ) -> Any:
     """
-    执行 fn(**args)，对 UpstreamError 做指数退避重试。
+    执行 fn(**args)，对 UpstreamError（和默认下的 ToolTimeoutError）做指数退避重试。
 
     Args:
-        fn          : 调用目标（通常是 tool handler 或 dispatch 包装）
-        args        : kwargs 字典
-        max_retries : 最大重试次数（默认取 config.TOOL_RETRY_MAX）
-        on_retry    : (attempt: int, error_msg: str) → None，每次失败后回调
-                      用于把错误反馈回模型（F4 "每次失败回灌模型"）
+        fn               : 调用目标（通常是 tool handler 或 dispatch 包装）
+        args             : kwargs 字典
+        max_retries      : 最大重试次数（默认取 config.TOOL_RETRY_MAX）
+        on_retry         : (attempt: int, error_msg: str) → None，每次失败后回调
+                           用于把错误反馈回模型（F4 "每次失败回灌模型"）
+        retry_on_timeout : 超时是否重试。默认 True（读操作/幂等工具，符合 F4）。
+                           **非幂等/写工具须传 False**：_call_with_timeout 超时后旧线程
+                           仍在后台执行 handler，重试会造成重复副作用（重复写库/发布）。
     """
     from config import TOOL_RETRY_MAX, TOOL_TIMEOUT_SEC
     retries = max_retries if max_retries is not None else TOOL_RETRY_MAX
@@ -60,7 +64,16 @@ def run_with_retry(
             return _call_with_timeout(fn, args, TOOL_TIMEOUT_SEC)
         except _NON_RETRYABLE:
             raise                            # 不可重试类直接传播
-        except _RETRYABLE as e:              # UpstreamError / ToolTimeoutError → 退避重试
+        except ToolTimeoutError as e:
+            last_err = e
+            if not retry_on_timeout:
+                raise                        # 非幂等工具：超时不重试，防旧线程+重试重复副作用
+            if attempt < retries:
+                if on_retry:
+                    on_retry(attempt, str(e))
+                delay = _BACKOFF_SEC[min(attempt, len(_BACKOFF_SEC) - 1)]
+                time.sleep(delay)
+        except UpstreamError as e:           # 上游5xx：调用未完成，重试安全
             last_err = e
             if attempt < retries:
                 # 只在会真正重试时才回调（on_retry 次数 = 重试次数）

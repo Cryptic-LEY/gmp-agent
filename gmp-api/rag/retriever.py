@@ -18,6 +18,7 @@ import pymysql.cursors
 
 from config import (
     MYSQL_HOST, MYSQL_PORT, MYSQL_USER, MYSQL_PASSWORD, MYSQL_DATABASE,
+    MYSQL_SSL_DISABLED,
     EMB_BASE_URL, EMB_API_KEY, EMB_MODEL,
     RAG_TOP_K, RAG_GRAPH_HOP, RAG_THRESHOLD,
     RAG_GRAPH_THRESHOLD, RAG_FINAL_TOP_N,
@@ -45,6 +46,7 @@ def _get_conn():
         database=MYSQL_DATABASE, charset='utf8mb4',
         cursorclass=pymysql.cursors.Cursor,
         connect_timeout=2,
+        ssl_disabled=MYSQL_SSL_DISABLED,  # 本机 localhost 免 SSL 握手：建连 ~30ms→~1ms（A3）
     )
     try:
         yield conn

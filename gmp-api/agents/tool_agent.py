@@ -252,10 +252,12 @@ def ask_agent(
                 )
 
             try:
+                # 非幂等（sensitive/写）工具超时不重试：避免超时旧线程 + 重试重复副作用
                 result = run_with_retry(
                     lambda **_: dispatch(name, args, authorized=authorized),
                     {},
                     on_retry=_on_retry,
+                    retry_on_timeout=(t.level != "sensitive"),
                 )
                 # 先注入每次退避的错误消息（F4：每次失败回灌模型）
                 for rm in retry_log:

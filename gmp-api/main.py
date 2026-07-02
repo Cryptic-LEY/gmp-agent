@@ -22,6 +22,16 @@ def _build_vector_index() -> None:
     try:
         idx = vector_index.rebuild()
         print(f"[startup] 向量索引就绪：{idx.size} 条")
+        # 预热检索链路：首次 FULLTEXT/建连是冷路径(~760ms)，在此消化，
+        # 避免第一个真实用户请求承担冷启动延迟（A3 稳态 P95≈30ms）。
+        try:
+            from rag.retriever import retrieve
+            from config import EMB_DIM
+            retrieve("洁净区预热查询", query_vec=[0.1] * EMB_DIM,
+                     rerank_fn=lambda q, ps: [1.0] * len(ps))
+            print("[startup] 检索链路预热完成")
+        except Exception as we:  # noqa: BLE001
+            print(f"[startup] 检索预热跳过：{we}")
     except Exception as e:  # noqa: BLE001
         print(f"[startup] 向量索引构建失败，降级运行：{e}")
 

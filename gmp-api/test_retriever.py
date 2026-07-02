@@ -114,11 +114,20 @@ def test_falls_back_to_keyword_when_index_unavailable():
 
 
 def test_retrieve_latency_p95_under_300ms():
-    """A3：注入 query_vec + mock reranker，度量 faiss+MySQL 纯检索 P95（不含 rerank 网络）。"""
+    """A3：注入 query_vec + mock reranker，度量 HNSW+MySQL 纯检索稳态 P95（不含 rerank 网络）。
+
+    先显式预热一次：首个请求是冷路径（首次建连 + 首次 FULLTEXT 把 ngram 索引载入
+    buffer pool，实测 ~760ms），属一次性成本，生产由 main.py startup 预热消化。
+    这里预热后测稳态 P95，而非靠 P95-of-20 丢掉冷启动离群点（避免指标掩盖尖峰）。
+    """
     _, emb = _a_reg_vector()
     qv = json.loads(emb)
     # rerank_fn mock：保持原顺序，绕开 DashScope 网络调用
     _mock_rerank = lambda q, passages: [1.0 - i * 0.01 for i in range(len(passages))]
+
+    # 预热：消化首次冷启动成本
+    retrieve("洁净区监测的要求是什么", query_vec=qv, rerank_fn=_mock_rerank)
+
     lat = []
     for _ in range(20):
         t0 = time.perf_counter()
@@ -126,5 +135,8 @@ def test_retrieve_latency_p95_under_300ms():
         lat.append((time.perf_counter() - t0) * 1000)
     lat.sort()
     p95 = lat[max(0, int(len(lat) * 0.95) - 1)]
-    print(f"\nretrieve P95 = {p95:.1f}ms over {len(lat)} runs (min={lat[0]:.1f} max={lat[-1]:.1f})")
-    assert p95 < 300, f"检索 P95={p95:.1f}ms 超过 300ms 预算"
+    # 预热后连最坏单次也应在预算内（稳态无尖峰）
+    print(f"\nretrieve 稳态 P95 = {p95:.1f}ms over {len(lat)} runs "
+          f"(min={lat[0]:.1f} max={lat[-1]:.1f})")
+    assert p95 < 300, f"检索稳态 P95={p95:.1f}ms 超过 300ms 预算"
+    assert lat[-1] < 300, f"预热后最坏单次 {lat[-1]:.1f}ms 仍超预算（稳态不应有尖峰）"

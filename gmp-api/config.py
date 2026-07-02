@@ -13,6 +13,9 @@ MYSQL_PORT     = int(os.getenv("MYSQL_PORT", "3306"))
 MYSQL_USER     = os.getenv("MYSQL_USER",     "root")
 MYSQL_PASSWORD = os.getenv("MYSQL_PASSWORD", "")
 MYSQL_DATABASE = os.getenv("MYSQL_DATABASE", "gmp")
+# 本机 portable MySQL 连 localhost 无需 SSL；SSL 握手每次约 30–200ms，是检索延迟主因。
+# 生产用远程需 SSL 的库时设为 false。
+MYSQL_SSL_DISABLED = os.getenv("MYSQL_SSL_DISABLED", "true").lower() == "true"
 
 # 统一使用通义千问（DashScope）——LLM和Embedding共用同一个Key和BaseURL
 DASHSCOPE_BASE_URL = os.getenv("DASHSCOPE_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1")

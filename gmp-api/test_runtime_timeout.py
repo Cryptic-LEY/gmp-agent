@@ -43,6 +43,45 @@ def test_slow_handler_raises_timeout_within_two_seconds():
     os.environ.pop("TOOL_TIMEOUT_SEC", None)
 
 
+def test_timeout_not_retried_for_non_idempotent(monkeypatch):
+    """非幂等工具(retry_on_timeout=False)超时不重试。
+
+    根因：_call_with_timeout 超时后旧线程仍在后台跑 handler；若再重试，
+    写操作会被执行多次(重复副作用)。故非幂等工具超时应只执行一次即失败。
+    """
+    import tools.runtime as rt
+    sleep_log = []
+    monkeypatch.setattr(rt.time, "sleep", lambda s: sleep_log.append(s))
+
+    def _always_timeout(fn, args, timeout_sec):
+        raise ToolTimeoutError("模拟工具超时")
+    monkeypatch.setattr(rt, "_call_with_timeout", _always_timeout)
+
+    retry_msgs = []
+    with pytest.raises(ToolTimeoutError):
+        run_with_retry(_slow_handler, {}, max_retries=3, retry_on_timeout=False,
+                       on_retry=lambda a, m: retry_msgs.append(m))
+    assert retry_msgs == [], f"非幂等超时不应重试，实际重试 {len(retry_msgs)} 次"
+    assert sleep_log == [], f"非幂等超时不应退避，实际 {sleep_log}"
+
+
+def test_upstream_still_retried_when_timeout_disabled(monkeypatch):
+    """retry_on_timeout=False 只关超时重试，UpstreamError 仍照常退避重试。"""
+    import tools.runtime as rt
+    monkeypatch.setattr(rt.time, "sleep", lambda s: None)
+    from tools.errors import UpstreamError
+
+    calls = [0]
+    def _always_upstream(fn, args, timeout_sec):
+        calls[0] += 1
+        raise UpstreamError("上游5xx")
+    monkeypatch.setattr(rt, "_call_with_timeout", _always_upstream)
+
+    with pytest.raises(UpstreamError):
+        run_with_retry(_slow_handler, {}, max_retries=2, retry_on_timeout=False)
+    assert calls[0] == 3, f"UpstreamError 应重试(1+2=3次)，实际 {calls[0]}"
+
+
 def test_timeout_triggers_backoff_retry(monkeypatch):
     """F4（spec §4.1 / F4 表）：ToolTimeoutError 触发 1s/2s/4s 退避重试。
 
