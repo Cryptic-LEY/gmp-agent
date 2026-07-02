@@ -267,3 +267,23 @@ def test_b4_preserves_all_chunks():
     reordered = reorder_for_llm(chunks)
     assert len(reordered) == len(chunks)
     assert {c.score for c in reordered} == {c.score for c in chunks}
+
+
+def test_b4_experience_chunks_always_at_tail():
+    """经验条（doc_type='experience'）不参与头尾竞争，始终在所有 reg/kp 之后。"""
+    exp = DocChunk("EXP-001", "experience", "", "历史经验内容", 0.485)  # 高于部分法规
+    reg_high = _doc(0.90)
+    reg_low  = _doc(0.35)
+    chunks = [exp, reg_high, reg_low]
+    reordered = reorder_for_llm(chunks)
+    assert reordered[-1].doc_type == "experience", "经验条应始终在末尾"
+    assert reordered[0].score == pytest.approx(0.90), "最高分法规应在首位"
+
+
+def test_b4_experience_score_never_displaces_regulations():
+    """经验条分数高于法规时，reorder 后法规仍排在经验条前面。"""
+    reg = _doc(0.40)
+    exp = DocChunk("EXP-002", "experience", "", "经验", 0.80)  # score > reg
+    reordered = reorder_for_llm([reg, exp])
+    types = [c.doc_type for c in reordered]
+    assert types.index("regulation") < types.index("experience")

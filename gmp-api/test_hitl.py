@@ -161,6 +161,33 @@ def test_f6_ask_agent_executes_after_approval(monkeypatch):
     assert result2["answer"] != ""
 
 
+def test_hitl_api_fails_closed_when_no_key(monkeypatch):
+    """未配置 HITL_API_KEY 时，审批依赖函数应 raise 503（fail-closed）。"""
+    from fastapi import HTTPException
+    import main
+    monkeypatch.setattr(main, "HITL_API_KEY", "")
+    with pytest.raises(HTTPException) as exc_info:
+        main._hitl_auth_dep(x_hitl_key="")
+    assert exc_info.value.status_code == 503
+
+
+def test_hitl_api_rejects_wrong_key(monkeypatch):
+    """配置了 HITL_API_KEY 但提供错误 key 时应 raise 403。"""
+    from fastapi import HTTPException
+    import main
+    monkeypatch.setattr(main, "HITL_API_KEY", "correct-secret")
+    with pytest.raises(HTTPException) as exc_info:
+        main._hitl_auth_dep(x_hitl_key="wrong-key")
+    assert exc_info.value.status_code == 403
+
+
+def test_hitl_api_accepts_correct_key(monkeypatch):
+    """提供正确 key 时依赖函数应正常返回（不 raise）。"""
+    import main
+    monkeypatch.setattr(main, "HITL_API_KEY", "correct-secret")
+    main._hitl_auth_dep(x_hitl_key="correct-secret")  # 不 raise 即通过
+
+
 def test_f6_safe_tool_not_blocked(monkeypatch):
     """safe 工具即使 HITL_ENABLED 也不被挂起。"""
     import agents.tool_agent as ta

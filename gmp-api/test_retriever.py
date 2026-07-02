@@ -8,6 +8,7 @@
   契约：retrieve 仍返回 list[DocChunk]，保留 BM25/图遍历/降级
 """
 import json
+import socket
 import time
 
 import pytest
@@ -19,6 +20,15 @@ from rag.retriever import retrieve, DocChunk, _get_conn
 # 用真库现有向量建一次进程内索引（只读）。
 # MySQL 不可用时跳过整个模块，不中断 pytest 收集其他测试文件。
 pytestmark = pytest.mark.integration
+
+# 快速 TCP 探针：避免等待 pymysql 全量连接超时
+try:
+    _s = socket.create_connection(("127.0.0.1", 3306), timeout=1)
+    _s.close()
+    del _s
+except OSError as _e:
+    pytest.skip(f"MySQL unavailable — integration tests skipped: {_e}",
+                allow_module_level=True)
 
 try:
     vi.rebuild()

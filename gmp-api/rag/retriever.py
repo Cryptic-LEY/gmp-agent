@@ -325,9 +325,11 @@ def retrieve(question: str, edu_level: str | None = None,
             chunks.append(DocChunk(k_id, 'kp', title, content, score))
 
         # 经验条独立池：不参与 rerank 竞争，始终追加末尾（spec C6：0.5x 低权重辅助参考）
+        # exp_cap 保证 RAG_FINAL_TOP_N < 2 时不会超出总配额
+        exp_cap = min(2, max(0, RAG_FINAL_TOP_N - 1))
         exp_chunks = [
             DocChunk(exp_id, 'experience', '', exp_content, exp_score)
-            for exp_id, exp_content, exp_score in list(all_experience.values())[:2]
+            for exp_id, exp_content, exp_score in list(all_experience.values())[:exp_cap]
         ]
 
         if RAG_RERANK_ENABLED and chunks:
@@ -339,7 +341,7 @@ def retrieve(question: str, edu_level: str | None = None,
         else:
             chunks = chunks[:max(1, RAG_FINAL_TOP_N - len(exp_chunks))]
 
-        # 追加经验条至末尾（始终在法规/知识点之后，总量不超 RAG_FINAL_TOP_N）
+        # 追加经验条至末尾（始终在法规/知识点之后，总量 = len(reg/kp) + len(exp) ≤ RAG_FINAL_TOP_N）
         chunks = chunks + exp_chunks
 
         return chunks

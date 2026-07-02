@@ -88,17 +88,22 @@ def compress_chunk(text: str, ratio: float = 0.5) -> str:
 def reorder_for_llm(chunks: list[DocChunk]) -> list[DocChunk]:
     """
     头尾重组，规避 lost-in-the-middle：
-      [最高分] + [其余 ↓分数] + [第二高分]
+      [最高分reg/kp] + [其余 ↓分数] + [第二高分reg/kp] + [experience（始终末尾）]
 
-    ≤2 块时保持原序。
+    经验条（doc_type='experience'）量纲不同（0.5x），不参与重组竞争，固定置末。
+    ≤2 块非经验条时保持原序。
     """
-    if len(chunks) <= 2:
-        return list(chunks)
-    by_score = sorted(chunks, key=lambda c: c.score, reverse=True)
+    exp  = [c for c in chunks if c.doc_type == 'experience']
+    main = [c for c in chunks if c.doc_type != 'experience']
+
+    if len(main) <= 2:
+        return list(main) + exp
+
+    by_score = sorted(main, key=lambda c: c.score, reverse=True)
     head   = by_score[0]
     second = by_score[1]
     middle = by_score[2:]
-    return [head] + middle + [second]
+    return [head] + middle + [second] + exp
 
 
 # ── 内部实现 ──────────────────────────────────────────────────────────────────

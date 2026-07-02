@@ -9,11 +9,7 @@ from pydantic import BaseModel
 
 from agents.tutor import ask_tutor, ask_tutor_stream
 from agents.tool_agent import ask_agent, route_intent
-from agents.hitl import (
-    approve as hitl_approve,
-    get_pending as hitl_pending,
-    get_pending_owner as hitl_get_pending_owner,
-)
+from agents.hitl import approve as hitl_approve, get_pending as hitl_pending
 from config import HITL_API_KEY
 from rag import vector_index
 
@@ -56,7 +52,7 @@ class AgentRequest(BaseModel):
     user_id: str | None = None
     edu_level: str | None = None          # '专科' | '本科'；透传给 ask_tutor（E8 向后兼容）
     history: list[dict] | None = None     # 多轮历史；透传给 ask_tutor
-    authorized: bool = True               # 前端通过登态/HITL 传入；False 时 sensitive 工具被拦截
+    authorized: bool = False              # 默认 False（fail-closed）；生产部署须从服务端 JWT/session 提取
     pre_approved: list[str] | None = None # HITL 审批后前端携带的 approval_id 列表
 
 
@@ -71,7 +67,6 @@ class AgentResponse(BaseModel):
 
 class ApproveRequest(BaseModel):
     approval_id: str
-    approver_user_id: str | None = None  # 请求方 user_id；与 pending 所有者不符时拒绝
 
 
 # ── 路由 ──────────────────────────────────────────────────────────────────────
@@ -138,8 +133,13 @@ def chat_agent(req: AgentRequest):
 # ── F6：HITL 审批接口 ─────────────────────────────────────────────────────────
 
 def _hitl_auth_dep(x_hitl_key: str = Header(default="")) -> None:
-    """若配置了 HITL_API_KEY，则要求请求头携带 X-Hitl-Key 且值一致。"""
-    if HITL_API_KEY and x_hitl_key != HITL_API_KEY:
+    """HITL 审批接口鉴权（fail-closed）：未配置密钥时拒绝所有请求。"""
+    if not HITL_API_KEY:
+        raise HTTPException(
+            status_code=503,
+            detail="HITL 审批接口未启用：请在 .env 中配置 HITL_API_KEY",
+        )
+    if x_hitl_key != HITL_API_KEY:
         raise HTTPException(status_code=403, detail="HITL 接口需要有效的 X-Hitl-Key 请求头")
 
 
@@ -151,14 +151,7 @@ def agent_pending():
 
 @app.post("/agent/approve", dependencies=[Depends(_hitl_auth_dep)])
 def agent_approve(req: ApproveRequest):
-    """放行指定审批请求，允许 sensitive 工具继续执行。"""
-    # 所有权校验：pending 记录绑定了 user_id 时，approver 必须匹配
-    pending_owner = hitl_get_pending_owner(req.approval_id)
-    if pending_owner is not None and req.approver_user_id != pending_owner:
-        raise HTTPException(
-            status_code=403,
-            detail="approver_user_id 与审批请求所有者不匹配",
-        )
+    """放行指定审批请求，允许 sensitive 工具继续执行。鉴权由 _hitl_auth_dep 完成。"""
     ok = hitl_approve(req.approval_id)
     if not ok:
         raise HTTPException(status_code=404, detail=f"approval_id {req.approval_id!r} 不存在")
