@@ -117,6 +117,35 @@ def test_aggregate_from_query_log_runs_without_error():
     assert isinstance(count, int) and count >= 0
 
 
+def test_aggregate_created_at_uses_server_clock_not_utc():
+    """时区一致性：query_log→error_book 聚合行的 created_at 应贴近 MySQL 服务器时钟，
+    而非 UTC（本地 UTC+8 时旧实现会差 ~8h，导致「最近记录」排序错乱）。"""
+    from logger import log_query
+    from eval.error_book import aggregate_from_query_log, _get_conn
+    q = f"{_TEST_PREFIX}时区一致性测试"
+    # 清理该问题的 query_log 与 error_book 残留
+    with _get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM error_book WHERE question LIKE %s", (_TEST_PREFIX + "%",))
+            try:
+                cur.execute("DELETE FROM query_log WHERE question LIKE %s", (_TEST_PREFIX + "%",))
+            except Exception:
+                pass
+    # 写一条 critic 触发的日志 → 聚合
+    log_query(q, None, [], "draft", True, "最终答案", 10)
+    aggregate_from_query_log(lookback_days=1)
+    with _get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT ABS(TIMESTAMPDIFF(SECOND, created_at, NOW())) "
+                "FROM error_book WHERE question=%s AND source='critic' ORDER BY id DESC LIMIT 1",
+                (q,),
+            )
+            row = cur.fetchone()
+    assert row is not None, "critic 行应已聚合入库"
+    assert row[0] < 120, f"聚合行 created_at 与服务器时钟差 {row[0]}s，疑似 UTC/本地时区混用"
+
+
 def test_errorbook_loop_mark_appears_in_negatives():
     """闭环：写入坏 case → get_few_shot_negatives 查到该 case → 可注入 prompt。"""
     q = f"{_TEST_PREFIX}闭环测试问题"

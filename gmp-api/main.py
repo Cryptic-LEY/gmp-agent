@@ -226,21 +226,38 @@ def chat_feedback_positive(req: PositiveFeedbackRequest):
     if not req.question.strip() or not req.answer.strip():
         raise HTTPException(status_code=400, detail="question 和 answer 不能为空")
 
-    # 服务端复核 Critic（确定性条款幻觉检测，零 LLM 成本、不可被客户端绕过）
+    # 服务端复核 Critic（不可被客户端绕过）：两道关
     from rag.retriever import retrieve
-    from agents.tutor import _check_hallucinated_articles
+    from agents.tutor import _check_hallucinated_articles, _cove_verify
+    from config import COVE_ENABLED
     try:
         retrieved = retrieve(req.question, edu_level=req.edu_level)
         valid_ids = {c.id for c in retrieved}
     except Exception as e:  # noqa: BLE001
         raise HTTPException(status_code=503, detail=f"检索不可用，暂无法核验：{e}")
+
+    # 关1（确定性、零成本）：引用了检索里没有的条款号 → 幻觉，拒
     issue = _check_hallucinated_articles(req.answer, valid_ids)
     if issue:
-        return {"status": "rejected", "reason": f"服务端 Critic 未通过：{issue}"}
+        return {"status": "rejected", "reason": f"服务端 Critic（条款幻觉）未通过：{issue}"}
+
+    # 关2（CoVe 忠实度）：逐条比对答案关键声明与检索上下文，抓「不引用条款号的语义错误」。
+    # 覆盖「答案内容与法规矛盾但没伪造 REG-ID」的情形。
+    if COVE_ENABLED:
+        context = "\n".join(c.content for c in retrieved[:8])
+        contradiction = _cove_verify(req.answer, context)
+        if contradiction:
+            return {"status": "rejected",
+                    "reason": f"服务端 Critic（忠实度）未通过：{contradiction}"}
 
     import uuid
     from memory.experience import add_experience
     exp_id = uuid.uuid4().hex[:12]
-    ok = add_experience(exp_id, req.question, req.answer, list(valid_ids)[:8])
-    return {"status": "reflowed" if ok else "skipped",
-            "exp_id": exp_id if ok else None}
+    indexed, persisted = add_experience(exp_id, req.question, req.answer, list(valid_ids)[:8])
+    if not indexed:
+        return {"status": "skipped", "exp_id": None}
+    if not persisted:
+        # 索引已生效但写库失败：如实上报，不谎称 durable 回流
+        return {"status": "reflowed_volatile", "exp_id": exp_id,
+                "warning": "已加入内存索引但持久化失败，重启后会丢失"}
+    return {"status": "reflowed", "exp_id": exp_id}

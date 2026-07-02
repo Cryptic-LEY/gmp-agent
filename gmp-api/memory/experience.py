@@ -75,7 +75,7 @@ def add_experience(
     sources: list[str],
     embed_fn=None,
     persist: bool = True,
-) -> bool:
+) -> tuple[bool, bool]:
     """
     把好 case 加入进程内向量索引，并（默认）持久化到 MySQL。
 
@@ -89,13 +89,17 @@ def add_experience(
         persist:   是否写入 experience_pool（测试可传 False 跳过 DB）
 
     Returns:
-        True 表示成功加入索引；False 表示降级（索引不可用或嵌入失败）。
+        (indexed, persisted)：
+          indexed   — 是否成功加入进程内索引（即时生效）
+          persisted — 是否成功写入 experience_pool（跨重启durable）。
+                      persist=False 或写库失败时为 False。
+        调用方据此如实上报：仅 indexed=经内存回流但不 durable；两者皆真=完整回流。
     """
     from rag.vector_index import get_index
 
     idx = get_index()
     if idx is None:
-        return False
+        return (False, False)
 
     if embed_fn is None:
         from rag.retriever import embed_query
@@ -105,7 +109,7 @@ def add_experience(
         vec = embed_fn(f"{question} {answer[:500]}")
     except Exception as exc:
         logger.warning("experience embed failed for %s: %s", exp_id, exc)
-        return False
+        return (False, False)
 
     chunk_id = f"{_EXP_PREFIX}{exp_id}"
     idx.add_items([{
@@ -118,9 +122,8 @@ def add_experience(
         "vec":       vec,
     }])
 
-    if persist:
-        _persist_experience(exp_id, question, answer, sources, vec)
-    return True
+    persisted = _persist_experience(exp_id, question, answer, sources, vec) if persist else False
+    return (True, persisted)
 
 
 def load_experiences(idx) -> int:

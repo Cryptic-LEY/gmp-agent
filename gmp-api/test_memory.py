@@ -235,11 +235,11 @@ def test_c6_experience_recalled_after_add():
     old_idx = vi._index
     vi._index = idx
     try:
-        ok = add_experience(
+        indexed, _ = add_experience(
             "exp001", "洁净区如何分级？", "A级是最高级洁净区，适用于高风险操作。",
             ["REG-GMP2010-001"], embed_fn=mock_embed, persist=False,
         )
-        assert ok, "add_experience 应返回 True"
+        assert indexed, "add_experience 应成功加入索引"
         hits = idx.search(exp_vec.tolist(), k=5)
         exp_hits = [h for h in hits if h.doc_type == "experience"]
         assert exp_hits, "应能检索到 experience 条目"
@@ -298,9 +298,10 @@ def test_c6_experience_persists_and_reloads():
         old = vi._index
         vi._index = idx
         try:
-            ok = add_experience(exp_id, "洁净区如何分级？", "A级最高洁净级别", ["REG-X"],
-                                embed_fn=lambda t: vec.tolist(), persist=True)
-            assert ok, "add_experience 应成功加入索引"
+            indexed, persisted = add_experience(
+                exp_id, "洁净区如何分级？", "A级最高洁净级别", ["REG-X"],
+                embed_fn=lambda t: vec.tolist(), persist=True)
+            assert indexed and persisted, "add_experience 应索引成功且持久化成功"
         finally:
             vi._index = old
 
@@ -322,14 +323,14 @@ def test_c6_experience_persists_and_reloads():
 
 
 def test_c6_experience_no_index_returns_false():
-    """C6 补充: 索引为 None 时 add_experience 返回 False（降级）。"""
+    """C6 补充: 索引为 None 时 add_experience 返回 (False, False)（降级）。"""
     from memory.experience import add_experience
     import rag.vector_index as vi
     old_idx = vi._index
     vi._index = None
     try:
-        result = add_experience("exp999", "q", "a", [])
-        assert result is False
+        indexed, persisted = add_experience("exp999", "q", "a", [])
+        assert indexed is False and persisted is False
     finally:
         vi._index = old_idx
 

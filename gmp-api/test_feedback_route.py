@@ -90,15 +90,51 @@ def test_positive_feedback_rejects_hallucinated_citation(monkeypatch):
     assert resp.json()["status"] == "rejected", resp.json()
 
 
+def test_positive_feedback_rejects_semantic_contradiction(monkeypatch):
+    """答案不伪造 REG-ID 但内容与上下文矛盾 → CoVe 忠实度关拒绝回流。"""
+    import rag.retriever as rr
+    from rag.retriever import DocChunk
+    import agents.tutor as tutor
+    monkeypatch.setattr(rr, "retrieve",
+        lambda q, edu_level=None: [DocChunk("REG-GMP2010-A010", "regulation", "十", "洁净区应保持正压", 0.9)])
+    # CoVe 返回非空 = 发现矛盾
+    monkeypatch.setattr(tutor, "_cove_verify", lambda draft, ctx, **k: "答案称负压，与资料正压矛盾")
+    resp = client.post("/chat/feedback/positive", json={
+        "question": "洁净区压差要求", "answer": "洁净区应保持负压。"})
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "rejected", resp.json()
+
+
 def test_positive_feedback_reflows_clean_answer(monkeypatch):
-    """答案只引用检索命中的条款 → 服务端 Critic 通过 → 回流。"""
+    """答案只引用检索命中的条款且 CoVe 通过 → 回流。"""
     import rag.retriever as rr
     from rag.retriever import DocChunk
     import memory.experience as exp
+    import agents.tutor as tutor
     monkeypatch.setattr(rr, "retrieve",
         lambda q, edu_level=None: [DocChunk("REG-GMP2010-A010", "regulation", "十", "内容", 0.9)])
-    monkeypatch.setattr(exp, "add_experience", lambda *a, **k: True)
+    monkeypatch.setattr(tutor, "_cove_verify", lambda draft, ctx, **k: "")  # 通过
+    monkeypatch.setattr(exp, "add_experience", lambda *a, **k: (True, True))
     resp = client.post("/chat/feedback/positive", json={
         "question": "GMP第十条规定了什么", "answer": "依据 REG-GMP2010-A010 规定……"})
     assert resp.status_code == 200
     assert resp.json()["status"] == "reflowed", resp.json()
+
+
+def test_positive_feedback_reports_volatile_when_persist_fails(monkeypatch):
+    """持久化失败时不谎称 durable：返回 reflowed_volatile 并带 warning。"""
+    import rag.retriever as rr
+    from rag.retriever import DocChunk
+    import memory.experience as exp
+    import agents.tutor as tutor
+    monkeypatch.setattr(rr, "retrieve",
+        lambda q, edu_level=None: [DocChunk("REG-GMP2010-A010", "regulation", "十", "内容", 0.9)])
+    monkeypatch.setattr(tutor, "_cove_verify", lambda draft, ctx, **k: "")  # 通过
+    # 索引成功但持久化失败
+    monkeypatch.setattr(exp, "add_experience", lambda *a, **k: (True, False))
+    resp = client.post("/chat/feedback/positive", json={
+        "question": "GMP第十条规定了什么", "answer": "依据 REG-GMP2010-A010 规定……"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "reflowed_volatile", body
+    assert "warning" in body

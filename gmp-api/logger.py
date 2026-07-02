@@ -3,7 +3,6 @@
 每次问答完成后写入 MySQL query_log 表，供后续问题定位和坏case回流使用。
 """
 import json
-from datetime import datetime
 
 import pymysql
 
@@ -41,13 +40,14 @@ def log_query(
                         latency_ms       INT
                     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
                 """)
+                # 用 MySQL 服务器时钟 NOW(3)，与 error_book 等表的 CURRENT_TIMESTAMP 统一；
+                # 旧实现写 Python datetime.utcnow() 会与本地时区默认列混用，导致排序/窗口错乱。
                 cur.execute(
                     """INSERT INTO query_log
                        (timestamp, question, edu_level, retrieved_ids,
                         draft_answer, critic_triggered, final_answer, latency_ms)
-                       VALUES (%s,%s,%s,%s,%s,%s,%s,%s)""",
+                       VALUES (NOW(3),%s,%s,%s,%s,%s,%s,%s)""",
                     (
-                        datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3],
                         question,
                         edu_level,
                         json.dumps(retrieved_ids, ensure_ascii=False),
