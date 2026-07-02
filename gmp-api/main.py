@@ -209,26 +209,38 @@ def chat_feedback(req: FeedbackRequest):
 class PositiveFeedbackRequest(BaseModel):
     question: str
     answer: str
-    sources: list[str] = []
-    critic_triggered: bool = False   # 前端透传该答案生成时的 Critic 结果
     edu_level: str | None = None
+    # 注意：不接受客户端 critic_triggered/sources——Critic 结果由服务端重新核验，
+    # 客户端自述不可信（否则「双门槛」可被伪造）。
 
 
 @app.post("/chat/feedback/positive")
 def chat_feedback_positive(req: PositiveFeedbackRequest):
     """
-    接收前端正反馈（用户点赞）。仅当「Critic 未触发（通过）」且「用户显式点赞」
-    双门槛同时满足时，才把该问答回流到经验索引（spec C6）。
-    critic_triggered=True 的答案即使被点赞也不回流，防止把模型没自查出的错误答案回灌。
+    接收前端正反馈（用户点赞）。双门槛 = 「服务端 Critic 复核通过」+「用户显式点赞」。
+
+    关键：Critic 那一半由**服务端自己核验**，不信客户端透传的 critic_triggered。
+    服务端按问题重新检索得到可信 reg_id 集合，跑确定性条款幻觉检测——答案若引用了
+    检索里不存在的条款号（最危险的伪造/幻觉）则拒绝回流，防止坏答案污染经验池。
     """
     if not req.question.strip() or not req.answer.strip():
         raise HTTPException(status_code=400, detail="question 和 answer 不能为空")
-    if req.critic_triggered:
-        return {"status": "skipped", "reason": "answer 未通过 Critic，不回流经验池"}
+
+    # 服务端复核 Critic（确定性条款幻觉检测，零 LLM 成本、不可被客户端绕过）
+    from rag.retriever import retrieve
+    from agents.tutor import _check_hallucinated_articles
+    try:
+        retrieved = retrieve(req.question, edu_level=req.edu_level)
+        valid_ids = {c.id for c in retrieved}
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(status_code=503, detail=f"检索不可用，暂无法核验：{e}")
+    issue = _check_hallucinated_articles(req.answer, valid_ids)
+    if issue:
+        return {"status": "rejected", "reason": f"服务端 Critic 未通过：{issue}"}
 
     import uuid
     from memory.experience import add_experience
     exp_id = uuid.uuid4().hex[:12]
-    ok = add_experience(exp_id, req.question, req.answer, req.sources)
+    ok = add_experience(exp_id, req.question, req.answer, list(valid_ids)[:8])
     return {"status": "reflowed" if ok else "skipped",
             "exp_id": exp_id if ok else None}

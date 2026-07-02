@@ -162,9 +162,13 @@ def evaluate_one(record: dict, ask_fn=None) -> dict:
         return {"id": record["id"], "error": str(e)}
     latency_ms = int((time.monotonic() - t0) * 1000)
 
-    from rag.retriever import retrieve
-    retrieved = retrieve(question, edu_level=edu_level, query_vec=None)
-    contexts = [chunk.content for chunk in retrieved]
+    # 证据对齐：优先用生成答案时**实际使用**的 contexts（ask_tutor 现返回 contexts），
+    # 避免二次 retrieve 拿到另一批文档给答案打分。仅当 ask_fn 未提供时才回退检索。
+    contexts = result.get("contexts")
+    if contexts is None:
+        from rag.retriever import retrieve
+        retrieved = retrieve(question, edu_level=edu_level, query_vec=None)
+        contexts = [chunk.content for chunk in retrieved]
 
     cp = _score_context_precision(question, contexts, answer_points)
     ff = _score_faithfulness(answer, contexts)

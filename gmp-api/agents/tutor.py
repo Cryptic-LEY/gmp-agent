@@ -568,7 +568,10 @@ def ask_tutor(
         latency_ms=latency_ms,
     )
 
-    return answer_result
+    # 返回本次实际检索到的文档内容，供评估复用（避免二次 retrieve 造成证据错位）。
+    # 不放进 answer_result（已缓存）以免膨胀语义缓存；仅附加到返回值。
+    return {**answer_result,
+            "contexts": [d["content"] for d in result["retrieved_docs"]]}
 
 
 # ── 流式问答入口（P2-3） ────────────────────────────────────────────────────────

@@ -74,3 +74,31 @@ def test_feedback_default_source_is_user_feedback():
     from eval.error_book import get_recent_errors
     records = get_recent_errors(question=q, n=5)
     assert records and records[0]["source"] == "user_feedback"
+
+
+# ── C6：正反馈服务端 Critic 复核（不信客户端 critic_triggered）─────────────────
+
+def test_positive_feedback_rejects_hallucinated_citation(monkeypatch):
+    """答案引用了检索里不存在的条款号 → 服务端 Critic 拒绝回流（客户端无法绕过）。"""
+    import rag.retriever as rr
+    from rag.retriever import DocChunk
+    monkeypatch.setattr(rr, "retrieve",
+        lambda q, edu_level=None: [DocChunk("REG-GMP2010-A010", "regulation", "十", "内容", 0.9)])
+    resp = client.post("/chat/feedback/positive", json={
+        "question": "GMP第十条规定了什么", "answer": "依据 REG-FAKE-999 的规定……"})
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "rejected", resp.json()
+
+
+def test_positive_feedback_reflows_clean_answer(monkeypatch):
+    """答案只引用检索命中的条款 → 服务端 Critic 通过 → 回流。"""
+    import rag.retriever as rr
+    from rag.retriever import DocChunk
+    import memory.experience as exp
+    monkeypatch.setattr(rr, "retrieve",
+        lambda q, edu_level=None: [DocChunk("REG-GMP2010-A010", "regulation", "十", "内容", 0.9)])
+    monkeypatch.setattr(exp, "add_experience", lambda *a, **k: True)
+    resp = client.post("/chat/feedback/positive", json={
+        "question": "GMP第十条规定了什么", "answer": "依据 REG-GMP2010-A010 规定……"})
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "reflowed", resp.json()
