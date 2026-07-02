@@ -1,7 +1,8 @@
 """
 06 工具运行时：退避重试 + 可观测性。
 
-run_with_retry : UpstreamError → 1s/2s/4s 退避最多 3 次；NotFound/Forbidden 不重试。
+run_with_retry : Upstream5xx/Timeout 类 → 1s/2s/4s 退避最多 3 次（spec §4.1/F4）；
+                 NotFound/Forbidden/InvalidArgs 不重试。
 ContextObserver : 记录每步 token 增长斜率与工具重复计数；斜率异常产生告警。
 """
 from __future__ import annotations
@@ -15,7 +16,10 @@ from tools.errors import (
     ForbiddenError, InvalidArgsError, NotFoundError, ToolTimeoutError, UpstreamError,
 )
 
-_NON_RETRYABLE = (NotFoundError, ForbiddenError, InvalidArgsError, ToolTimeoutError)
+# 不可重试类：资源不存在 / 无权限 / 参数错误（需模型自修正，非瞬时故障）
+_NON_RETRYABLE = (NotFoundError, ForbiddenError, InvalidArgsError)
+# 可重试类：上游 5xx 与超时（瞬时故障，退避后可能恢复）—— spec F4
+_RETRYABLE = (UpstreamError, ToolTimeoutError)
 _BACKOFF_SEC = [1, 2, 4]          # F4：指数退避序列
 
 
@@ -55,8 +59,8 @@ def run_with_retry(
         try:
             return _call_with_timeout(fn, args, TOOL_TIMEOUT_SEC)
         except _NON_RETRYABLE:
-            raise                            # 不可重试类直接传播（含 ToolTimeoutError）
-        except UpstreamError as e:
+            raise                            # 不可重试类直接传播
+        except _RETRYABLE as e:              # UpstreamError / ToolTimeoutError → 退避重试
             last_err = e
             if attempt < retries:
                 # 只在会真正重试时才回调（on_retry 次数 = 重试次数）
@@ -83,6 +87,7 @@ class ContextObserver:
         self._prev_tokens: int = 0
         self._slopes: list[int] = []
         self._repeat_counts: dict[str, int] = {}
+        self._last_tool: str | None = None       # 上一次调用的工具（用于连续判定）
         self.alerts: list[str] = []
 
     @property
@@ -114,6 +119,17 @@ class ContextObserver:
         return obs
 
     def record_repeat(self, tool_name: str) -> int:
-        """记录工具重复调用次数，返回当前累计次数。"""
-        self._repeat_counts[tool_name] = self._repeat_counts.get(tool_name, 0) + 1
+        """记录工具的连续重复调用次数，返回当前连续次数。
+
+        连续语义：同一工具连续被调用才累加；一旦调用了不同工具，
+        该工具的连续计数清零重来（区别于跨整段会话的累计次数）。
+        """
+        if tool_name == self._last_tool:
+            self._repeat_counts[tool_name] = self._repeat_counts.get(tool_name, 0) + 1
+        else:
+            # 换了工具：新工具连续计数从 1 起，旧工具连续计数清零
+            if self._last_tool is not None:
+                self._repeat_counts[self._last_tool] = 0
+            self._repeat_counts[tool_name] = 1
+        self._last_tool = tool_name
         return self._repeat_counts[tool_name]

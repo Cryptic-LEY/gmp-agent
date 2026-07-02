@@ -181,6 +181,19 @@ def test_f5_repeat_count_tracked():
     assert obs.repeat_counts["search_regulation"] == 2
 
 
+def test_f5_repeat_count_is_consecutive_not_cumulative():
+    """连续重复语义：插入不同工具后，原工具的连续计数清零。"""
+    from tools.runtime import ContextObserver
+    obs = ContextObserver()
+    obs.record_repeat("A")
+    obs.record_repeat("A")            # A 连续 2
+    assert obs.repeat_counts["A"] == 2
+    obs.record_repeat("B")            # 切到 B，A 连续清零
+    assert obs.repeat_counts["A"] == 0
+    assert obs.repeat_counts["B"] == 1
+    assert obs.record_repeat("A") == 1  # A 重新从 1 起（非累计到 3）
+
+
 def test_f5_anomaly_alert_generated():
     """持续大幅增长时应产生告警条目。"""
     from tools.runtime import ContextObserver

@@ -288,6 +288,16 @@ def build_index(conn) -> VectorIndex:
         })
 
     idx.add_items(records)
+
+    # ── 经验回流：把持久化的好 case 灌回索引（跨进程/重建不丢失，spec C6） ──────────
+    try:
+        from memory.experience import load_experiences
+        n_exp = load_experiences(idx)
+        if n_exp:
+            logger.info("经验回流：从 experience_pool 加载 %d 条", n_exp)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("经验回流加载失败（降级，不影响主索引）：%s", exc)
+
     return idx
 
 

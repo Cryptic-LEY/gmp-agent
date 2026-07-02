@@ -237,7 +237,7 @@ def test_c6_experience_recalled_after_add():
     try:
         ok = add_experience(
             "exp001", "洁净区如何分级？", "A级是最高级洁净区，适用于高风险操作。",
-            ["REG-GMP2010-001"], embed_fn=mock_embed,
+            ["REG-GMP2010-001"], embed_fn=mock_embed, persist=False,
         )
         assert ok, "add_experience 应返回 True"
         hits = idx.search(exp_vec.tolist(), k=5)
@@ -261,7 +261,8 @@ def test_c6_experience_doc_type_correct():
     old_idx = vi._index
     vi._index = idx
     try:
-        add_experience("exp002", "批记录应保存多久？", "批记录保存期限...", [], embed_fn=lambda t: vec.tolist())
+        add_experience("exp002", "批记录应保存多久？", "批记录保存期限...", [],
+                       embed_fn=lambda t: vec.tolist(), persist=False)
         hits = idx.search(vec.tolist(), k=3)
         assert hits[0].doc_type == "experience"
     finally:

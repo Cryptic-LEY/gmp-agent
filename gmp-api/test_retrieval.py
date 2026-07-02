@@ -4,20 +4,34 @@ D1 回归测试（MySQL 版）：取代已损坏的 test_p1.py。
 覆盖：条款号幻觉检测 / edu_level 过滤 / BM25混合检索。
 """
 import json
+import socket
 import pytest
 
 import rag.vector_index as vi
 from rag.retriever import retrieve, DocChunk, _get_conn
 from agents.tutor import _check_hallucinated_articles
 
-# 进程内索引（只读，免费；失败则相关测试自动跳过）
-try:
-    vi.rebuild()
-    _index_ok = True
-except Exception:
-    _index_ok = False
 
-_skip_db = pytest.mark.skipif(not _index_ok, reason="向量索引构建失败，跳过检索测试")
+def _db_reachable(host: str = "127.0.0.1", port: int = 3306, timeout: float = 1.0) -> bool:
+    """快速 TCP 探针：MySQL 不可达时避免等待 pymysql 全量连接超时。"""
+    try:
+        s = socket.create_connection((host, port), timeout=timeout)
+        s.close()
+        return True
+    except OSError:
+        return False
+
+
+# 进程内索引（只读，免费）。DB 不可达时直接跳过，绝不在导入阶段阻塞。
+_index_ok = False
+if _db_reachable():
+    try:
+        vi.rebuild()
+        _index_ok = True
+    except Exception:
+        _index_ok = False
+
+_skip_db = pytest.mark.skipif(not _index_ok, reason="向量索引构建失败/MySQL不可达，跳过检索测试")
 
 
 def _get_reg_vec():

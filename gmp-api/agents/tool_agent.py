@@ -28,8 +28,10 @@ from agents.router import route_model
 from agents.guard import GuardRail, BudgetExceeded
 from agents.hitl import request_approval, is_approved_for
 from tools.registry import schemas, dispatch, get_tool
-from tools.runtime import run_with_retry
-from tools.errors import InvalidArgsError, NotFoundError, ForbiddenError, UpstreamError
+from tools.runtime import run_with_retry, ContextObserver
+from tools.errors import (
+    InvalidArgsError, NotFoundError, ForbiddenError, UpstreamError, ToolTimeoutError,
+)
 from tools.validation import validate_args
 
 
@@ -121,9 +123,13 @@ def ask_agent(
     steps = 0
     arg_error_count: dict[str, int] = {}
     guard = GuardRail()                     # F1/F2/F3：per-invocation 护栏
+    observer = ContextObserver()            # F5：上下文增长斜率 + 工具重复观测
 
     while steps < MAX_REASONING_STEPS:
         steps += 1
+
+        # F5：观测本步上下文增长斜率（斜率异常写入 observer.alerts）
+        observer.observe(messages, steps)
 
         # F1：物理红线（GuardRail 超限抛 BudgetExceeded，此处优雅兜底）
         try:
@@ -133,6 +139,7 @@ def ask_agent(
                 "answer": f"[已达步数上限] {e}",
                 "tool_calls_log": tool_calls_log,
                 "steps": steps,
+                "observer_alerts": observer.alerts,
             }
 
         # ② 调 LLM
@@ -169,6 +176,9 @@ def ask_agent(
             args = tc["args"]
             tc_id = tc["id"]
             tool_calls_log.append({"name": name, "step": steps})
+
+            # F5：记录工具重复调用（连续重复计数，供可观测性）
+            observer.record_repeat(name)
 
             # F2：动作哈希重复检测
             loop_warning = guard.check_action(name, args)
@@ -233,12 +243,12 @@ def ask_agent(
                 messages.append({"role": "tool", "tool_call_id": tc_id, "content": content})
                 continue
 
-            # F4：执行（run_with_retry 做 1s/2s/4s 退避，每次失败回灌模型）
+            # F4：执行（run_with_retry 对 Upstream5xx/Timeout 做 1s/2s/4s 退避，每次失败回灌模型）
             retry_log: list[str] = []
 
             def _on_retry(attempt: int, err_msg: str) -> None:
                 retry_log.append(
-                    f"[UpstreamError 重试 {attempt + 1}] {err_msg}，退避后重试..."
+                    f"[工具重试 {attempt + 1}] {err_msg}，退避后重试..."
                 )
 
             try:
@@ -258,11 +268,11 @@ def ask_agent(
                 content = f"[NotFound] {e}，请换用其他方式。"
             except ForbiddenError as e:
                 content = f"[Forbidden] {e}，该操作需要用户授权。"
-            except UpstreamError as e:
+            except (UpstreamError, ToolTimeoutError) as e:
                 for rm in retry_log:
                     messages.append({"role": "tool", "tool_call_id": tc_id, "content": rm})
                 retried = len(retry_log)
-                content = f"[UpstreamError] {e}，已重试 {retried} 次，上游服务暂时不可用。"
+                content = f"[工具故障] {e}，已重试 {retried} 次，服务暂时不可用。"
             except Exception as e:
                 content = f"[Error] 工具执行失败：{e}"
 

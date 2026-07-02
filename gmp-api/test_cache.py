@@ -152,6 +152,29 @@ def test_b6_rebuild_triggers_invalidation():
     assert cache.get(vec, None) is None, "rebuild() 后缓存应被清空"
 
 
+# ─── B6：负反馈按答案精确失效 ────────────────────────────────────────────────
+
+def test_invalidate_by_answer_removes_matching_entry():
+    """负反馈：invalidate_by_answer 清除 result.answer 匹配的缓存条目。"""
+    cache = SemanticCache(max_size=100, threshold=0.9)
+    v_bad = _unit_vec(seed=11)
+    v_good = _unit_vec(seed=22)
+    cache.put(v_bad, None, {"answer": "坏答案：温度60°C", "sources": []})
+    cache.put(v_good, None, {"answer": "好答案：温度20-25°C", "sources": []})
+
+    cleared = cache.invalidate_by_answer("坏答案：温度60°C")
+    assert cleared == 1
+    assert cache.get(v_bad, None) is None, "坏答案应已从缓存清除"
+    assert cache.get(v_good, None) is not None, "其他答案不应受影响"
+
+
+def test_invalidate_by_answer_empty_is_noop():
+    cache = SemanticCache(max_size=100, threshold=0.9)
+    cache.put(_unit_vec(seed=1), None, {"answer": "x"})
+    assert cache.invalidate_by_answer("") == 0
+    assert cache.size == 1
+
+
 # ─── LRU 容量控制 ─────────────────────────────────────────────────────────────
 
 def test_lru_eviction_respects_max_size():

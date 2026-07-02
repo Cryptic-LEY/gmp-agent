@@ -528,19 +528,9 @@ def ask_tutor(
                 save_summary(user_id, summary)
             except Exception:
                 pass
-        # C2：好 case 异步回流到经验索引（critic 未触发 = 高质量回答）
-        if not critic_triggered:
-            try:
-                import threading, uuid
-                from memory.experience import add_experience
-                exp_id = uuid.uuid4().hex[:12]
-                threading.Thread(
-                    target=add_experience,
-                    args=(exp_id, question, result["final_answer"], sources),
-                    daemon=True,
-                ).start()
-            except Exception:
-                pass
+        # C2：经验回流已改为「Critic 通过 + 用户显式正反馈」双门槛（spec C6）。
+        # 仅 critic 未触发不足以判定为好 case（可能是模型没自查出问题），
+        # 因此不再在此自动回流；回流由 POST /chat/feedback/positive 在用户点赞时触发。
 
     # ── 四层记忆：异步实体抽取 + 命中率监控 ──────────────────────────────────
     if user_id and MEMORY_ENABLED:
@@ -758,18 +748,8 @@ def ask_tutor_stream(
                 save_summary(user_id, summary)
             except Exception:
                 pass
-        if not critic_triggered:
-            try:
-                import threading, uuid
-                from memory.experience import add_experience
-                exp_id = uuid.uuid4().hex[:12]
-                threading.Thread(
-                    target=add_experience,
-                    args=(exp_id, question, final_answer, sources),
-                    daemon=True,
-                ).start()
-            except Exception:
-                pass
+        # C2：经验回流已改为「Critic 通过 + 用户显式正反馈」双门槛（spec C6），
+        # 见 POST /chat/feedback/positive；此处不再自动回流。
         if PROFILE_ASYNC:
             try:
                 from memory.profile import extract_entities_async

@@ -142,6 +142,24 @@ class SemanticCache:
             for eid in to_del:
                 del self._store[eid]
 
+    def invalidate_by_answer(self, answer: str) -> int:
+        """
+        清除缓存中 result.answer 等于指定文本的条目（用于负反馈闭环）。
+        返回清除条数。无需重新 embedding，按结果文本精确匹配，
+        确保被用户标记为坏的答案不再从缓存继续下发。
+        """
+        if not answer:
+            return 0
+        with self._lock:
+            to_del = [
+                eid
+                for eid, (_v, _edu, _uid, r, _ts) in self._store.items()
+                if r.get("answer") == answer
+            ]
+            for eid in to_del:
+                del self._store[eid]
+            return len(to_del)
+
     @property
     def hit_rate(self) -> float:
         total = self._hits + self._misses

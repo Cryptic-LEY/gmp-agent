@@ -185,4 +185,40 @@ def chat_feedback(req: FeedbackRequest):
         fix_hint=req.fix_hint,
         source="user_feedback",
     )
-    return {"status": "recorded", "error_id": eid}
+    # B6 闭环：清除该坏答案的语义缓存条目，避免继续从缓存下发
+    from config import SEMANTIC_CACHE_ENABLED
+    cleared = 0
+    if SEMANTIC_CACHE_ENABLED:
+        from cache.semantic_cache import get_cache
+        cleared = get_cache().invalidate_by_answer(req.bad_answer)
+    return {"status": "recorded", "error_id": eid, "cache_cleared": cleared}
+
+
+# ── C6：好 case 经验回流（Critic 通过 + 用户正反馈 双门槛）──────────────────────
+
+class PositiveFeedbackRequest(BaseModel):
+    question: str
+    answer: str
+    sources: list[str] = []
+    critic_triggered: bool = False   # 前端透传该答案生成时的 Critic 结果
+    edu_level: str | None = None
+
+
+@app.post("/chat/feedback/positive")
+def chat_feedback_positive(req: PositiveFeedbackRequest):
+    """
+    接收前端正反馈（用户点赞）。仅当「Critic 未触发（通过）」且「用户显式点赞」
+    双门槛同时满足时，才把该问答回流到经验索引（spec C6）。
+    critic_triggered=True 的答案即使被点赞也不回流，防止把模型没自查出的错误答案回灌。
+    """
+    if not req.question.strip() or not req.answer.strip():
+        raise HTTPException(status_code=400, detail="question 和 answer 不能为空")
+    if req.critic_triggered:
+        return {"status": "skipped", "reason": "answer 未通过 Critic，不回流经验池"}
+
+    import uuid
+    from memory.experience import add_experience
+    exp_id = uuid.uuid4().hex[:12]
+    ok = add_experience(exp_id, req.question, req.answer, req.sources)
+    return {"status": "reflowed" if ok else "skipped",
+            "exp_id": exp_id if ok else None}

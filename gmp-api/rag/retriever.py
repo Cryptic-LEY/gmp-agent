@@ -311,9 +311,21 @@ def retrieve(question: str, edu_level: str | None = None,
                 continue
             all_kp[k_id] = (k_id, rec['title'], rec['content'], score)
 
-        # ── 4. 排序截取 top-N（沿用 reg/kp 配额） ───────────────────────────
-        reg_quota = max(0, min(10, RAG_FINAL_TOP_N - 2))
-        kp_quota = max(0, RAG_FINAL_TOP_N - reg_quota)
+        # ── 4. 排序截取 top-N ────────────────────────────────────────────────
+        # 经验条独立池：不参与 rerank 竞争，始终追加末尾（spec C6：0.5x 低权重辅助参考）。
+        # exp_cap = min(2, TOP_N//2)：经验最多 2 席，且永远不超过主内容席位（保证法规/知识点占多数）。
+        exp_cap = min(2, RAG_FINAL_TOP_N // 2)
+        exp_chunks = [
+            DocChunk(exp_id, 'experience', '', exp_content, exp_score)
+            for exp_id, exp_content, exp_score in list(all_experience.values())[:exp_cap]
+        ]
+
+        # 主内容（reg/kp）预算 = 总预算扣掉经验席位，且 ≥1
+        main_budget = max(1, RAG_FINAL_TOP_N - len(exp_chunks))
+        # kp 预留 ≤2 席，但绝不把法规挤到 0（法规是逐字引用核心，优先保障）
+        kp_reserve = min(2, len(all_kp), max(0, main_budget - 1))
+        reg_quota = min(len(all_reg), main_budget - kp_reserve)
+        kp_quota = min(len(all_kp), main_budget - reg_quota)  # 法规不足时 kp 补齐
 
         sorted_reg = sorted(all_reg.values(), key=lambda x: x[3], reverse=True)[:reg_quota]
         sorted_kp = sorted(all_kp.values(), key=lambda x: x[3], reverse=True)[:kp_quota]
@@ -324,22 +336,13 @@ def retrieve(question: str, edu_level: str | None = None,
         for k_id, title, content, score in sorted_kp:
             chunks.append(DocChunk(k_id, 'kp', title, content, score))
 
-        # 经验条独立池：不参与 rerank 竞争，始终追加末尾（spec C6：0.5x 低权重辅助参考）
-        # exp_cap 保证 RAG_FINAL_TOP_N < 2 时不会超出总配额
-        exp_cap = min(2, max(0, RAG_FINAL_TOP_N - 1))
-        exp_chunks = [
-            DocChunk(exp_id, 'experience', '', exp_content, exp_score)
-            for exp_id, exp_content, exp_score in list(all_experience.values())[:exp_cap]
-        ]
-
         if RAG_RERANK_ENABLED and chunks:
             from rag.reranker import rerank as _rerank
-            # experience 不参与 rerank，只对 reg/kp 重排；top_n 留出经验槽位
-            top_n = max(1, RAG_FINAL_TOP_N - len(exp_chunks))
+            # experience 不参与 rerank，只对 reg/kp 重排；top_n = 主内容预算
             chunks = _rerank(question, chunks[:RAG_RERANK_TOP_BEFORE],
-                             top_n=top_n, rerank_fn=rerank_fn)
+                             top_n=main_budget, rerank_fn=rerank_fn)
         else:
-            chunks = chunks[:max(1, RAG_FINAL_TOP_N - len(exp_chunks))]
+            chunks = chunks[:main_budget]
 
         # 追加经验条至末尾（始终在法规/知识点之后，总量 = len(reg/kp) + len(exp) ≤ RAG_FINAL_TOP_N）
         chunks = chunks + exp_chunks

@@ -1,20 +1,23 @@
 -- Migration 0004: reg_chunks Phase-2 schema（small-to-big 分块）
 --
--- ⚠️  一次性 migration，会删除并重建 reg_chunks 表
+-- 非破坏性策略：仅在 reg_chunks 不存在、或存在但完全为空时建表。
+-- 若表内已有任何数据（无论 embedding 是否为 NULL）则 SIGNAL 中止，绝不 DROP。
 -- ═══════════════════════════════════════════════════════════════════
--- 执行后必须：
---   1. 重新生成 embedding：py -3.11 -m rag.embedder
---   2. 触发索引重建：    POST http://localhost:8001/rebuild-index
--- ═══════════════════════════════════════════════════════════════════
+-- 首次部署执行后：
+--   1. 生成 embedding：py -3.11 -m rag.embedder
+--   2. 触发索引重建：  POST http://localhost:8001/rebuild-index
 --
--- 安全机制：若 reg_chunks 已含 embedding 数据则 SIGNAL 中止，
--- 阻止意外丢失已支付向量。确认备份后删除该存储过程内的安全检查再执行。
+-- 若需在已有数据的表上重建（确认已备份），请手动 DROP TABLE reg_chunks 后再跑本文件。
+-- ═══════════════════════════════════════════════════════════════════
+
+-- 先清理可能残留的存储过程（上次 SIGNAL 中断后可能未 DROP，防重跑报 already exists）
+DROP PROCEDURE IF EXISTS _migrate_0004;
 
 DELIMITER //
 CREATE PROCEDURE _migrate_0004()
 BEGIN
-    DECLARE tbl_exists  INT DEFAULT 0;
-    DECLARE has_vectors INT DEFAULT 0;
+    DECLARE tbl_exists INT DEFAULT 0;
+    DECLARE row_count  INT DEFAULT 0;
 
     SELECT COUNT(*) INTO tbl_exists
     FROM information_schema.tables
@@ -22,31 +25,28 @@ BEGIN
       AND table_name   = 'reg_chunks';
 
     IF tbl_exists > 0 THEN
-        SELECT COUNT(*) INTO has_vectors
-        FROM reg_chunks
-        WHERE embedding IS NOT NULL
-        LIMIT 1;
-
-        IF has_vectors > 0 THEN
+        -- 表已存在：只要有任何行就中止，绝不删除现有数据
+        SELECT COUNT(*) INTO row_count FROM reg_chunks;
+        IF row_count > 0 THEN
             SIGNAL SQLSTATE '45000'
                 SET MESSAGE_TEXT =
-                    'ABORT: reg_chunks 已含 embedding 数据，请先备份再删除安全检查后重新执行';
+                    'ABORT: reg_chunks 已含数据，迁移已中止。如需重建请先备份并手动 DROP TABLE reg_chunks。';
         END IF;
+        -- 表存在且为空：无需重建，直接返回（幂等）
+    ELSE
+        -- 表不存在：建表
+        CREATE TABLE `reg_chunks` (
+          `chunk_id`   BIGINT NOT NULL AUTO_INCREMENT,
+          `reg_id`     VARCHAR(64) NOT NULL,
+          `seq`        INT NOT NULL DEFAULT 0,
+          `small_text` MEDIUMTEXT,
+          `big_text`   MEDIUMTEXT,
+          `embedding`  MEDIUMTEXT,
+          `meta`       TEXT,
+          PRIMARY KEY (`chunk_id`) USING BTREE,
+          INDEX `idx_reg_chunks_reg` (`reg_id`) USING BTREE
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci ROW_FORMAT=Dynamic;
     END IF;
-
-    -- 表不存在或为空时执行建表
-    DROP TABLE IF EXISTS `reg_chunks`;
-    CREATE TABLE `reg_chunks` (
-      `chunk_id`   BIGINT NOT NULL AUTO_INCREMENT,
-      `reg_id`     VARCHAR(64) NOT NULL,
-      `seq`        INT NOT NULL DEFAULT 0,
-      `small_text` MEDIUMTEXT,
-      `big_text`   MEDIUMTEXT,
-      `embedding`  MEDIUMTEXT,
-      `meta`       TEXT,
-      PRIMARY KEY (`chunk_id`) USING BTREE,
-      INDEX `idx_reg_chunks_reg` (`reg_id`) USING BTREE
-    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci ROW_FORMAT=Dynamic;
 END //
 DELIMITER ;
 
