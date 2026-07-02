@@ -151,6 +151,7 @@ def ask_agent(
                 "answer": response.get("content", ""),
                 "tool_calls_log": tool_calls_log,
                 "steps": steps,
+                "observer_alerts": observer.alerts,
             }
 
         # ③ 加入对话历史
@@ -221,6 +222,7 @@ def ask_agent(
                         "answer": "",
                         "tool_calls_log": tool_calls_log,
                         "steps": steps,
+                        "observer_alerts": observer.alerts,
                     }
 
             # E3：参数校验（InvalidArgs → 回灌 → LLM 自修正，上限 TOOL_ARG_RETRY）
@@ -288,4 +290,5 @@ def ask_agent(
         "answer": f"[已达 {MAX_REASONING_STEPS} 步上限] 当前进度见工具调用日志。",
         "tool_calls_log": tool_calls_log,
         "steps": steps,
+        "observer_alerts": observer.alerts,
     }

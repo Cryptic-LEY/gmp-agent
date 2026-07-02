@@ -46,8 +46,8 @@ def _ensure_table() -> None:
 
 
 def _persist_experience(exp_id: str, question: str, answer: str,
-                        sources: list[str], vec: list[float]) -> None:
-    """把好 case 写入 experience_pool（best-effort，失败静默）。"""
+                        sources: list[str], vec: list[float]) -> bool:
+    """把好 case 写入 experience_pool。成功返回 True，失败返回 False（并告警，不抛）。"""
     try:
         _ensure_table()
         with _get_conn() as conn:
@@ -62,8 +62,10 @@ def _persist_experience(exp_id: str, question: str, answer: str,
                      json.dumps(sources, ensure_ascii=False),
                      json.dumps(vec)),
                 )
+        return True
     except Exception as exc:
         logger.warning("experience persist failed for %s: %s", exp_id, exc)
+        return False
 
 
 def add_experience(

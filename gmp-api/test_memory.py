@@ -269,6 +269,58 @@ def test_c6_experience_doc_type_correct():
         vi._index = old_idx
 
 
+@pytest.mark.integration
+def test_c6_experience_persists_and_reloads():
+    """C6 端到端持久化：add_experience(persist=True) 写入 experience_pool，
+    load_experiences 能从库重新灌回新索引（证明跨进程/重启不丢失）。"""
+    from memory.experience import (
+        add_experience, load_experiences, _get_conn, _EXP_PREFIX,
+    )
+    from rag.vector_index import VectorIndex
+    import rag.vector_index as vi
+
+    exp_id = "_e2e_persist_test_"
+
+    def _cleanup():
+        try:
+            with _get_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("DELETE FROM experience_pool WHERE exp_id=%s", (exp_id,))
+        except Exception:
+            pass
+
+    _cleanup()
+    try:
+        vec = np.random.RandomState(3).randn(1024).astype(np.float32)
+        vec /= np.linalg.norm(vec)
+
+        idx = VectorIndex()
+        old = vi._index
+        vi._index = idx
+        try:
+            ok = add_experience(exp_id, "洁净区如何分级？", "A级最高洁净级别", ["REG-X"],
+                                embed_fn=lambda t: vec.tolist(), persist=True)
+            assert ok, "add_experience 应成功加入索引"
+        finally:
+            vi._index = old
+
+        # 1) 库里确有该行
+        with _get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT COUNT(*) FROM experience_pool WHERE exp_id=%s", (exp_id,))
+                assert cur.fetchone()[0] == 1, "持久化后 experience_pool 应有该行"
+
+        # 2) 新建索引 + load_experiences → 能重新检索到（跨重启不丢）
+        fresh = VectorIndex()
+        n = load_experiences(fresh)
+        assert n >= 1, "load_experiences 应至少灌回 1 条"
+        hits = fresh.search(vec.tolist(), k=3)
+        assert any(h.id == f"{_EXP_PREFIX}{exp_id}" for h in hits), \
+            "重建索引后应能检索到持久化的经验条"
+    finally:
+        _cleanup()
+
+
 def test_c6_experience_no_index_returns_false():
     """C6 补充: 索引为 None 时 add_experience 返回 False（降级）。"""
     from memory.experience import add_experience

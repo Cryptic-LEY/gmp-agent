@@ -1,7 +1,10 @@
 -- Migration 0004: reg_chunks Phase-2 schema（small-to-big 分块）
 --
--- 非破坏性策略：仅在 reg_chunks 不存在、或存在但完全为空时建表。
--- 若表内已有任何数据（无论 embedding 是否为 NULL）则 SIGNAL 中止，绝不 DROP。
+-- 定位：这是一个「安全初始化器」，不是通用 schema 演进迁移。
+--   - 表不存在 → 建表
+--   - 表存在且为空 → 幂等无操作（注意：不会给旧结构空表补列，需另写 ALTER 迁移）
+--   - 表存在且有任何数据 → SIGNAL 中止，绝不 DROP
+-- 若日后要改 reg_chunks 结构（加列/改类型），请新增 0005_*.sql 用 ALTER TABLE，勿改本文件。
 -- ═══════════════════════════════════════════════════════════════════
 -- 首次部署执行后：
 --   1. 生成 embedding：py -3.11 -m rag.embedder
