@@ -32,16 +32,37 @@ def test_rerank_orders_by_injected_scores():
 
 
 def test_rerank_dynamic_threshold_drops_far_scores():
-    """top=1.0, min_ratio=0.7 → min=0.7；0.5 和 0.3 应被动态阈值剪掉。"""
-    chunks = [_make_chunk(f"c{i}") for i in range(4)]
+    """top=1.0, min_ratio=0.40 → min=0.40；候选足够多时，<0.40 的长尾被剪掉。
+
+    用 10 条(超过 _MIN_KEEP=6)确保阈值真的生效、不被保底掩盖。
+    """
+    chunks = [_make_chunk(f"c{i}") for i in range(10)]
 
     def mock_fn(q, passages):
-        return [1.0, 0.8, 0.5, 0.3]
+        return [1.0, 0.9, 0.8, 0.7, 0.6, 0.5, 0.45, 0.3, 0.2, 0.1]
 
     result = rerank("问题", chunks, rerank_fn=mock_fn)
     ids = [c.id for c in result]
-    assert "c0" in ids and "c1" in ids, f"高分项应保留，ids={ids}"
-    assert "c2" not in ids and "c3" not in ids, f"低分项应被阈值剪掉，ids={ids}"
+    assert "c0" in ids and "c6" in ids, f"≥0.40 的应保留，ids={ids}"
+    assert "c7" not in ids and "c8" not in ids and "c9" not in ids, \
+        f"<0.40 的长尾应被剪掉，ids={ids}"
+
+
+def test_rerank_floor_prevents_starvation():
+    """回归：1 条高分 + 一堆低分时，动态阈值本会砍到 1 条；保底须保留 ≥ _MIN_KEEP 条。
+
+    复现真实 bug：多面向问题里次相关 chunk 分数远低于最佳，旧 0.70 阈值把 15 条砍成 1 条。
+    """
+    from rag.reranker import _MIN_KEEP
+    chunks = [_make_chunk(f"c{i}") for i in range(12)]
+
+    def mock_fn(q, passages):
+        return [1.0] + [0.2] * 11  # 仅 1 条高分，其余远低于 0.40*top
+
+    result = rerank("问题", chunks, rerank_fn=mock_fn)
+    assert len(result) >= _MIN_KEEP, \
+        f"保底应保留 ≥ {_MIN_KEEP} 条，避免砍到饥饿，实际 {len(result)}"
+    assert result[0].id == "c0", "最高分仍应排首位"
 
 
 def test_rerank_dynamic_threshold_keeps_mediocre_scores():

@@ -11,8 +11,11 @@ import dashscope
 from config import DASHSCOPE_API_KEY, RAG_RERANK_MODEL
 from rag.retriever import DocChunk
 
-# 动态阈值：若得分 < top * _MIN_RATIO，则剪掉（保留高相关；全平庸时 min 低，自动放宽）
-_MIN_RATIO = 0.70
+# 动态阈值：若得分 < top * _MIN_RATIO，则剪掉长尾（保留高相关；全平庸时 min 低，自动放宽）。
+# 0.70 过激：多面向问题里次相关 chunk 常低于最佳 70% 被误杀，曾把 15 条砍成 1 条 → CP/召回崩。
+_MIN_RATIO = 0.40
+# 保底：动态阈值后至少保留这么多条（与 top_n/候选数取小），防止砍到饥饿。
+_MIN_KEEP = 6
 
 RerankerFn = Callable[[str, list[str]], list[float]]
 
@@ -60,15 +63,21 @@ def rerank(
 
     ranked = sorted(zip(scores, chunks), key=lambda x: x[0], reverse=True)
 
-    # 动态阈值
+    # 动态阈值剪长尾
     top_score = ranked[0][0]
     min_score = top_score * _MIN_RATIO
-    ranked = [(s, c) for s, c in ranked if s >= min_score]
+    kept = [(s, c) for s, c in ranked if s >= min_score]
+
+    # 保底：阈值不得把结果砍到少于 floor 条（floor = min(候选数, top_n, _MIN_KEEP)）
+    cap = top_n if top_n is not None else len(ranked)
+    floor = min(len(ranked), cap, _MIN_KEEP)
+    if len(kept) < floor:
+        kept = ranked[:floor]
 
     if top_n is not None:
-        ranked = ranked[:top_n]
+        kept = kept[:top_n]
 
     return [
         DocChunk(c.id, c.doc_type, c.title, c.content, float(s))
-        for s, c in ranked
+        for s, c in kept
     ]

@@ -200,11 +200,22 @@ def run_eval(n: int | None = None, output_path: str | None = None) -> dict:
     if n:
         records = records[:n]
 
+    # 关键：独立进程默认不建向量索引（那是 FastAPI startup 的事），
+    # 不建则 retrieve/ask_tutor 双双降级到关键词检索，评测的是稀疏链路而非真实向量链路。
+    # 必须先 rebuild，否则 contexts 稀疏/为空 → CP=FF=0，基线不可信。
+    try:
+        import rag.vector_index as _vi
+        _idx = _vi.rebuild()
+        _index_note = f"已构建（{_idx.size} 向量）"
+    except Exception as e:  # noqa: BLE001
+        _index_note = f"构建失败，降级关键词检索：{e}"
+
     print(f"\n{'='*60}")
     print(f"  eval/ragas_eval.py  D3/D7 RAGAS 三维评测")
     print(f"{'='*60}")
     print(f"  题数：{len(records)}（金标集共{len(records)}题）")
     print(f"  Judge LLM：{RAGAS_JUDGE_MODEL}")
+    print(f"  向量索引：{_index_note}")
     print()
 
     results = []

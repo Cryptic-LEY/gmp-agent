@@ -129,6 +129,7 @@ def load_experiences(idx) -> int:
     """
     records: list[dict] = []
     try:
+        _ensure_table()  # 表不存在时先建（首次运行/空库场景，避免 1146 噪声告警）
         with _get_conn() as conn:
             with conn.cursor() as cur:
                 cur.execute(
