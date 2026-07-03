@@ -102,6 +102,10 @@ _HYPOTHETICAL_MARKER = (
     "如果", "怎么做", "怎么办", "该怎么", "要怎么", "如何", "怎样", "怎么才能",
     "是否可以", "能不能", "可不可以", "可以吗",
 )
+# 否定式：明确表示「不要执行该动作」，不绑定必做工具。
+_NEGATION_MARKER = (
+    "不要", "别", "无需", "不需要", "请勿", "不许", "不想", "不必",
+)
 
 
 def _is_hypothetical(question: str) -> bool:
@@ -109,16 +113,50 @@ def _is_hypothetical(question: str) -> bool:
     return any(m in question for m in _HYPOTHETICAL_MARKER)
 
 
+def _is_negated(question: str) -> bool:
+    """判断是否为否定式（明确要求不执行动作）。"""
+    return any(m in question for m in _NEGATION_MARKER)
+
+
 def _required_tool_groups(question: str) -> list[set[str]]:
     """从问题解析出「完成目标必须成功的工具组」列表（命中的每条规则一组）。
-    假设/咨询式提问（如「如果…该怎么做」）不绑定必做工具。"""
-    if _is_hypothetical(question):
+    假设/咨询式（如「如果…该怎么做」）或否定式（「不要修改…」）不绑定必做工具。"""
+    if _is_hypothetical(question) or _is_negated(question):
         return []
     groups: list[set[str]] = []
     for objs, acts, tools in _GOAL_RULES:
         if any(o in question for o in objs) and any(a in question for a in acts):
             groups.append(set(tools))
     return groups
+
+
+# 「声称已完成」标志（双语、短语级）：出现即视为成功声明，绝不放行为合法追问。
+_COMPLETION_CLAIM = (
+    "已更新", "已完成", "已成功", "已设置", "已生成", "已批改", "已保存", "已提交",
+    "更新成功", "设置成功", "生成成功", "已经更新", "已帮你", "已为你",
+    "updated your", "changed your", "i changed", "i've updated", "i have updated",
+    "has been updated", "have set", "completed", "success", "done",
+)
+
+
+def _claims_completion(answer: str) -> bool:
+    """终答是否声称动作已完成（避免把「已改…还满意吗？」当成追问放行）。"""
+    a = (answer or "").lower()
+    return any(c in a for c in _COMPLETION_CLAIM)
+
+
+def _missing_slots(unmet_required: list[str]) -> list[str]:
+    """从未达成的必要工具 schema 推导需要用户补充的槽位（结构化 needs_input）。
+    排除 user_id（由服务端注入）。"""
+    slots: list[str] = []
+    for name in unmet_required:
+        t = get_tool(name)
+        if not t:
+            continue
+        for p in t.parameters.get("required", []):
+            if p != "user_id" and p not in slots:
+                slots.append(p)
+    return slots
 
 
 def route_intent(question: str) -> str:
@@ -132,27 +170,6 @@ def route_intent(question: str) -> str:
         if kw in question:
             return "agent"
     return "tutor"
-
-
-# 声称已完成的标志：出现即视为「成功声明」，不能当作追问放行
-_COMPLETION_CLAIM = (
-    "已更新", "已完成", "已成功", "已设置", "已生成", "已批改", "已保存", "已提交",
-    "更新成功", "设置成功", "生成成功", "updated", "completed", "success", "done",
-)
-# 追问/请求补充信息的标志
-_CLARIFY_MARKER = (
-    "？", "?", "请提供", "请补充", "请告诉", "请问", "需要你", "麻烦提供",
-    "哪些", "哪个", "什么内容", "是否需要", "能否告诉", "告诉我", "补充一下",
-)
-
-
-def _is_clarification(answer: str) -> bool:
-    """判断终答是否为「未声称完成的追问」：含追问标志且不含任何完成声明。"""
-    if not answer:
-        return False
-    if any(c in answer.lower() for c in _COMPLETION_CLAIM):
-        return False
-    return any(m in answer for m in _CLARIFY_MARKER)
 
 
 # 工具契约：handler 的业务失败**应当抛出** tools.errors 里的分类异常
@@ -257,6 +274,7 @@ def ask_agent(
                 t for grp in required_groups if not (grp & successful_tools) for t in grp
             })
             model_text = response.get("content", "")
+            missing_slots: list[str] = []
             if unresolved:
                 # 有真实工具失败 → 一律覆盖为失败（无论文本是否像追问）
                 status = "partial_failure" if successful_tools else "tool_failed"
@@ -266,33 +284,38 @@ def ask_agent(
                     + (f"；已执行工具：{sorted(successful_tools)}" if successful_tools else "")
                     + "。请补充必要信息后重试，或改用其他方式。"
                 )
-            elif unmet_required and _is_clarification(model_text):
-                # 目标工具未运行、也无失败，且模型在如实追问（未声称完成）：
-                # 这是 spec「模糊需求 agent 自主补全」的正常路径。独立终态，保留具体追问文本。
-                status = "needs_input"
-                answer = model_text
-            elif unmet_required:
-                # 目标工具未运行，但模型给了非追问的（可能虚报完成的）文本 → 覆盖为失败
+            elif unmet_required and _claims_completion(model_text):
+                # 目标工具未运行，但模型声称已完成 → 虚报，覆盖为失败（绝不回显该文本）
                 status = "partial_failure" if successful_tools else "tool_failed"
                 problem = sorted(unmet_required)
                 answer = (
                     f"操作未完成。缺少执行证据的必要工具：{problem}"
                     + (f"；已执行工具：{sorted(successful_tools)}" if successful_tools else "")
-                    + "。请补充必要信息后重试，或改用其他方式。"
+                    + "。系统未执行该修改，请补充必要信息后重试。"
+                )
+            elif unmet_required:
+                # 目标工具未运行、无失败、也未声称完成：视为「需补充信息」的结构化终态。
+                # answer 由程序生成、携带 missing_slots，不回显模型原文（防潜在虚报泄漏）。
+                status = "needs_input"
+                missing_slots = _missing_slots(unmet_required)
+                answer = (
+                    "还需要补充信息才能完成该操作（系统尚未执行任何修改）。"
+                    + (f"请提供：{missing_slots}。" if missing_slots else "请补充具体内容。")
                 )
             elif not successful_tools:
                 # 无目标绑定且全程未执行任何工具：程序无法证伪文本，但确定性暴露「无执行证据」，
                 # 交由调用方对「行动类任务的成功声明」施加确认策略。不覆盖答案文本。
                 status = "no_tool_executed"
-                answer = response.get("content", "")
+                answer = model_text
             else:
                 status = "ok"
-                answer = response.get("content", "")
+                answer = model_text
             return {
                 "answer": answer,
                 "status": status,
                 "failed_tools": unresolved,
                 "unmet_required_tools": unmet_required,
+                "missing_slots": missing_slots,
                 "executed_tools": sorted(successful_tools),
                 "tool_calls_log": tool_calls_log,
                 "steps": steps,

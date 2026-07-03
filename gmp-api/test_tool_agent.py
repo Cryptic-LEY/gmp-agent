@@ -453,17 +453,41 @@ def test_e3_goal_unmet_when_no_tool_called():
     assert "SUCCESS" not in result["answer"] and "成功" not in result["answer"], result["answer"]
 
 
-def test_e3_clarifying_question_is_needs_input_not_failure():
-    """合法追问：目标信息不足时模型正常追问（未声称完成）→ needs_input，保留追问文本，
-    不得误判为 tool_failed（对齐 spec「模糊需求 agent 自主补全」）。"""
+def test_e3_clarifying_question_is_needs_input_structured():
+    """合法追问：信息不足时模型正常追问 → needs_input（结构化：带 missing_slots），
+    answer 由程序生成、不回显模型原文（避免潜在虚报泄漏）。"""
     def llm(messages, tools):
         return {"content": "请问你想把画像更新成什么？请提供学历、专业或薄弱知识点。"}
 
     result = ask_agent("帮我更新画像", llm_fn=llm)
     assert result["status"] == "needs_input", result
-    # 保留模型的具体追问，不覆盖
-    assert "请提供" in result["answer"], result["answer"]
+    assert "patch" in result["missing_slots"], result           # 结构化槽位来自工具 schema
     assert "update_user_profile" in result["unmet_required_tools"], result
+
+
+def test_e3_completion_claim_with_question_is_not_needs_input():
+    """边界1：模型声称已改却带问号（'I changed your profile...are you satisfied?'）
+    不得被当成合法追问；answer 绝不回显该虚报文本。"""
+    def llm(messages, tools):
+        return {"content": "I changed your profile to PhD; are you satisfied?"}
+
+    result = ask_agent("帮我更新画像", llm_fn=llm)
+    assert result["status"] == "tool_failed", result
+    # 模型的虚报原文不得出现在权威 answer 中
+    assert "changed your profile" not in result["answer"].lower(), result["answer"]
+
+
+def test_e3_negation_not_bound_as_action():
+    """边界2：否定句『不要修改我的画像』不绑定 update_user_profile，模型如实回答不判失败。"""
+    from agents.tool_agent import _required_tool_groups
+    assert _required_tool_groups("不要修改我的画像") == []
+    assert _required_tool_groups("我不想更新学习目标") == []
+
+    def llm(messages, tools):
+        return {"content": "好的，我不会修改你的画像。"}
+    result = ask_agent("不要修改我的画像", llm_fn=llm)
+    assert result["status"] != "tool_failed", result
+    assert result["unmet_required_tools"] == [], result
 
 
 def test_e3_handler_returns_failure_dict_recorded_as_failure():
