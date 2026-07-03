@@ -406,14 +406,51 @@ def test_e3_unregistered_tool_blocks_false_success():
 
 
 def test_e3_no_tool_executed_flagged():
-    """更高层边界：模型全程不调用任何工具却谎称成功 → status=no_tool_executed（暴露无执行证据）。"""
+    """无目标绑定的 agent 任务，模型全程不调用任何工具 → status=no_tool_executed（暴露无执行证据）。"""
     def llm(messages, tools):
-        return {"content": "SUCCESS：你的画像已更新。"}
+        return {"content": "这是一段没有调用工具的普通回答。"}
 
-    result = ask_agent("更新我的画像", llm_fn=llm)
+    # 用不触发目标绑定的问题（无「更新画像/生成课件/批改/规划」等动作词）
+    result = ask_agent("随便聊聊洁净区吧", llm_fn=llm)
     assert result["status"] == "no_tool_executed", result
     assert result["executed_tools"] == [], result
     assert result["failed_tools"] == [], result
+
+
+def test_e3_readonly_tool_success_is_not_goal_evidence():
+    """漏洞一：只读辅助工具成功 ≠ 完成用户目标。'更新画像'目标须 update_user_profile 成功。"""
+    _tools["_audit_read"] = Tool(
+        name="_audit_read", description="read helper",
+        parameters={"type": "object", "properties": {"x": {"type": "string"}}},
+        handler=lambda x="": {"data": "ok"}, level="safe",
+    )
+    try:
+        idx = [0]
+
+        def llm(messages, tools):
+            idx[0] += 1
+            if idx[0] == 1:
+                return {"tool_calls": [{"id": "1", "name": "_audit_read", "args": {"x": "y"}}]}
+            return {"content": "SUCCESS：你的画像已更新。"}
+
+        result = ask_agent("帮我更新画像", llm_fn=llm)
+        assert result["status"] == "partial_failure", result
+        assert "update_user_profile" in result["unmet_required_tools"], result
+        assert "SUCCESS" not in result["answer"] and "成功" not in result["answer"], result["answer"]
+        assert "_audit_read" in result["executed_tools"], result
+    finally:
+        _tools.pop("_audit_read", None)
+
+
+def test_e3_goal_unmet_when_no_tool_called():
+    """漏洞二落地：'更新画像'目标但全程不调工具 + 谎称成功 → 目标未达，覆盖为 tool_failed。"""
+    def llm(messages, tools):
+        return {"content": "SUCCESS：画像已更新。"}
+
+    result = ask_agent("帮我更新画像", llm_fn=llm)
+    assert result["status"] == "tool_failed", result
+    assert "update_user_profile" in result["unmet_required_tools"], result
+    assert "SUCCESS" not in result["answer"] and "成功" not in result["answer"], result["answer"]
 
 
 def test_e3_handler_returns_failure_dict_recorded_as_failure():

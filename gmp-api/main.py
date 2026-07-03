@@ -75,6 +75,7 @@ class AgentResponse(BaseModel):
     approval_id: str | None = None
     status: str = "ok"        # ok | tool_failed | partial_failure | no_tool_executed | hitl_pending | budget_exceeded | max_steps
     failed_tools: list[str] = []  # 结局为失败且未被后续成功覆盖的工具
+    unmet_required_tools: list[str] = []  # 完成用户目标必须成功、但没有成功执行的工具
 
 
 class ApproveRequest(BaseModel):
@@ -132,6 +133,7 @@ def chat_agent(req: AgentRequest):
             approval_id=result.get("approval_id"),
             status=result.get("status", "ok"),
             failed_tools=result.get("failed_tools", []),
+            unmet_required_tools=result.get("unmet_required_tools", []),
         )
     else:
         tutor_result = ask_tutor(req.question, edu_level=req.edu_level,

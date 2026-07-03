@@ -86,6 +86,35 @@ def route_intent(question: str) -> str:
     return "tutor"
 
 
+# 目标 → 所需工具能力绑定（确定性关键词规则）。
+# 每条 = (对象词集合, 动作词集合, 完成该目标必须成功的工具集合)。
+# 命中一条则该目标需要其工具集合中「至少一个」成功执行——只读辅助工具成功不算数。
+# 注意：这是关键词级绑定，只覆盖已定义的动作动词，无法覆盖任意自然语言表述（诚实边界）。
+_GOAL_RULES: list[tuple[tuple[str, ...], tuple[str, ...], set[str]]] = [
+    (("画像", "档案", "偏好", "薄弱", "学习目标"),
+     ("更新", "修改", "设置", "调整", "改一下", "改成"),
+     {"update_user_profile"}),
+    (("课件", "教案", "讲义"),
+     ("生成", "制作", "做一份", "出一份", "帮我做"),
+     {"generate_courseware"}),
+    (("作业", "答卷", "提交的"),
+     ("批改", "评分", "批阅", "打分"),
+     {"review_assignment"}),
+    (("路径", "学习计划", "学习方案", "学习路线"),
+     ("规划", "制定", "安排", "帮我", "生成"),
+     {"plan_learning_path"}),
+]
+
+
+def _required_tool_groups(question: str) -> list[set[str]]:
+    """从问题解析出「完成目标必须成功的工具组」列表（命中的每条规则一组）。"""
+    groups: list[set[str]] = []
+    for objs, acts, tools in _GOAL_RULES:
+        if any(o in question for o in objs) and any(a in question for a in acts):
+            groups.append(set(tools))
+    return groups
+
+
 # 工具契约：handler 的业务失败**应当抛出** tools.errors 里的分类异常
 # （NotFound/Forbidden/Upstream/Timeout/InvalidArgs）。若 handler 违反契约、用返回值
 # 表达失败（ok=false / success=false / error / status∈失败集），下面的兜底会将其判为失败，
@@ -146,6 +175,7 @@ def ask_agent(
     disabled_tools: set[str] = set()        # E3：参数反复非法而被程序层停用的工具（用于移除 schema）
     successful_tools: set[str] = set()      # E3：确有一次成功执行的工具
     failed_tools: dict[str, str] = {}       # E3：最近一次结局为失败的工具 → 原因（成功后清除）
+    required_groups = _required_tool_groups(question)  # E3：完成用户目标必须成功的工具组
     guard = GuardRail()                     # F1/F2/F3：per-invocation 护栏
     observer = ContextObserver()            # F5：上下文增长斜率 + 工具重复观测
 
@@ -178,21 +208,25 @@ def ask_agent(
         tool_calls = response.get("tool_calls", [])
 
         if not tool_calls:
-            # E3 终答硬校验（按具体工具）：failed_tools 本身即「最近结局为失败、尚未被
-            # 后续成功覆盖」的工具（成功时 pop、失败时写入）。不能再减 successful_tools——
-            # 那会把「同一工具先成功后失败」的后一次失败错误地掩盖掉。
+            # E3 终答硬校验：
+            #  - unresolved：结局为失败、未被后续成功覆盖的工具（failed_tools 即真相源）。
+            #  - unmet_required：完成用户目标必须成功的工具组中，没有任何一个成功的组
+            #    （只读辅助工具成功不算数——目标—工具—证据绑定，堵「无关工具成功冒充完成」）。
             unresolved = sorted(failed_tools)
-            if unresolved:
+            unmet_required = sorted({
+                t for grp in required_groups if not (grp & successful_tools) for t in grp
+            })
+            if unresolved or unmet_required:
                 status = "partial_failure" if successful_tools else "tool_failed"
+                problem = sorted(set(unresolved) | set(unmet_required))
                 answer = (
-                    f"操作未完全完成。失败工具：{unresolved}"
+                    f"操作未完成。缺少执行证据的必要工具：{problem}"
                     + (f"；已执行工具：{sorted(successful_tools)}" if successful_tools else "")
                     + "。请补充必要信息后重试，或改用其他方式。"
                 )
             elif not successful_tools:
-                # 更高层边界：全程未执行任何工具却给出终答（可能是澄清追问，也可能是
-                # 无执行证据的虚报）。程序无法证伪文本，但确定性暴露「无工具执行证据」，
-                # 交由调用方/前端对「行动类任务的成功声明」施加确认策略。不覆盖答案文本。
+                # 无目标绑定且全程未执行任何工具：程序无法证伪文本，但确定性暴露「无执行证据」，
+                # 交由调用方对「行动类任务的成功声明」施加确认策略。不覆盖答案文本。
                 status = "no_tool_executed"
                 answer = response.get("content", "")
             else:
@@ -202,6 +236,7 @@ def ask_agent(
                 "answer": answer,
                 "status": status,
                 "failed_tools": unresolved,
+                "unmet_required_tools": unmet_required,
                 "executed_tools": sorted(successful_tools),
                 "tool_calls_log": tool_calls_log,
                 "steps": steps,
