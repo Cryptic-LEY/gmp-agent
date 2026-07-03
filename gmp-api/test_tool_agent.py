@@ -453,6 +453,19 @@ def test_e3_goal_unmet_when_no_tool_called():
     assert "SUCCESS" not in result["answer"] and "成功" not in result["answer"], result["answer"]
 
 
+def test_e3_clarifying_question_is_needs_input_not_failure():
+    """合法追问：目标信息不足时模型正常追问（未声称完成）→ needs_input，保留追问文本，
+    不得误判为 tool_failed（对齐 spec「模糊需求 agent 自主补全」）。"""
+    def llm(messages, tools):
+        return {"content": "请问你想把画像更新成什么？请提供学历、专业或薄弱知识点。"}
+
+    result = ask_agent("帮我更新画像", llm_fn=llm)
+    assert result["status"] == "needs_input", result
+    # 保留模型的具体追问，不覆盖
+    assert "请提供" in result["answer"], result["answer"]
+    assert "update_user_profile" in result["unmet_required_tools"], result
+
+
 def test_e3_handler_returns_failure_dict_recorded_as_failure():
     """工具契约兜底：handler 用返回值(ok=false/error)表达业务失败而非抛异常 → 仍判为失败。"""
     _tools["_e3_softfail"] = Tool(
@@ -476,6 +489,29 @@ def test_e3_handler_returns_failure_dict_recorded_as_failure():
         assert "_e3_softfail" not in result["executed_tools"], result
     finally:
         _tools.pop("_e3_softfail", None)
+
+
+def test_route_and_goal_unified():
+    """路由与目标识别统一：'更新一下画像'/'修改我的画像' 应路由到 agent（此前漏判为 tutor）。"""
+    from agents.tool_agent import route_intent, _required_tool_groups
+    assert route_intent("请更新一下画像") == "agent"
+    assert route_intent("请修改我的画像") == "agent"
+    # '设置目标为通过考试' 应识别出必要工具（此前进 agent 却无绑定）
+    assert {"update_user_profile"} in _required_tool_groups("设置目标为通过考试")
+
+
+def test_hypothetical_question_not_bound_as_action():
+    """假设/怎么做类提问不应被误判为必须真实执行动作。"""
+    from agents.tool_agent import _required_tool_groups
+    assert _required_tool_groups("如果以后想更新画像，该怎么做？") == []
+    assert _required_tool_groups("怎么才能修改我的学习目标？") == []
+
+    # 端到端：这类问题即使模型直接作答，也不应被判为 tool_failed
+    def llm(messages, tools):
+        return {"content": "你可以在个人中心页面点击『编辑画像』来更新。"}
+    result = ask_agent("如果以后想更新画像，该怎么做？", llm_fn=llm)
+    assert result["status"] != "tool_failed", result
+    assert result["unmet_required_tools"] == [], result
 
 
 def test_e3_arg_retry_success_on_correction():

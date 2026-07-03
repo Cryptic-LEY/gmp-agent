@@ -68,16 +68,17 @@ def get_profile(user_id: str) -> dict:
     return out
 
 
-def upsert_profile(user_id: str, patch: dict) -> None:
+def upsert_profile(user_id: str, patch: dict) -> list[str]:
     """
     原地覆盖更新：patch 中每个顶层 key 整体替换对应列（治「幽灵旧值」）。
     JSON 列整体替换，不做深度合并。
+    返回实际写入的列名列表；patch 为空或不含任何有效列时返回 []（无操作，不触 DB）。
     """
     if not patch:
-        return
+        return []
     cols = [c for c in _COLUMNS if c in patch]
     if not cols:
-        return
+        return []
 
     values: list[Any] = []
     for col in cols:
@@ -98,6 +99,7 @@ def upsert_profile(user_id: str, patch: dict) -> None:
     with _get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(sql, [user_id] + values + values)
+    return cols
 
 
 def get_profile_hint(profile: dict) -> str:

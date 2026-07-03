@@ -12,8 +12,16 @@ def _get_handler(user_id: str) -> dict:
 
 def _update_handler(user_id: str, patch: dict) -> dict:
     from memory.profile import upsert_profile
-    upsert_profile(user_id, patch)
-    return {"status": "updated", "user_id": user_id}
+    from tools.errors import InvalidArgsError
+    if not isinstance(patch, dict) or not patch:
+        raise InvalidArgsError("patch 为空，没有任何字段可更新")
+    updated = upsert_profile(user_id, patch)
+    if not updated:
+        # 只含无效字段：无列被写入，不能谎报 updated（证明业务效果真实发生）
+        raise InvalidArgsError(
+            "patch 未包含任何可更新字段（有效字段：edu_level/major/weak_kp/goals/prefs）"
+        )
+    return {"status": "updated", "user_id": user_id, "updated_fields": updated}
 
 
 get_user_profile = Tool(

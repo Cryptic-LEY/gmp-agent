@@ -184,3 +184,18 @@ def test_e7_steps_capped_at_max():
             f"步数 {result['steps']} 超过 MAX_REASONING_STEPS={MAX_REASONING_STEPS}"
     finally:
         _tools.pop("_e7_mock", None)
+
+
+# ── E3 补充：update_user_profile 必须证明真实效果（空/无效 patch 判失败）──────────
+
+def test_update_profile_empty_patch_raises():
+    """空 patch 无实际修改 → 抛 InvalidArgsError，不得静默报 updated（不调 DB）。"""
+    with pytest.raises(InvalidArgsError):
+        dispatch("update_user_profile", {"user_id": "audit-user", "patch": {}}, authorized=True)
+
+
+def test_update_profile_invalid_fields_raises():
+    """patch 只含无效字段 → 无列可更新 → 抛 InvalidArgsError（不调 DB）。"""
+    with pytest.raises(InvalidArgsError):
+        dispatch("update_user_profile",
+                 {"user_id": "audit-user", "patch": {"not_a_column": 1}}, authorized=True)

@@ -78,20 +78,12 @@ _ACTION_KW = ("规划", "路径", "计划", "批改", "作业", "生成", "课�
               "更新画像", "设置目标", "建议学习", "帮我出")
 
 
-def route_intent(question: str) -> str:
-    """简单关键词路由。返回 'agent'（做事/规划）或 'tutor'（问答）。"""
-    for kw in _ACTION_KW:
-        if kw in question:
-            return "agent"
-    return "tutor"
-
-
 # 目标 → 所需工具能力绑定（确定性关键词规则）。
 # 每条 = (对象词集合, 动作词集合, 完成该目标必须成功的工具集合)。
 # 命中一条则该目标需要其工具集合中「至少一个」成功执行——只读辅助工具成功不算数。
 # 注意：这是关键词级绑定，只覆盖已定义的动作动词，无法覆盖任意自然语言表述（诚实边界）。
 _GOAL_RULES: list[tuple[tuple[str, ...], tuple[str, ...], set[str]]] = [
-    (("画像", "档案", "偏好", "薄弱", "学习目标"),
+    (("画像", "档案", "偏好", "薄弱", "学习目标", "目标"),
      ("更新", "修改", "设置", "调整", "改一下", "改成"),
      {"update_user_profile"}),
     (("课件", "教案", "讲义"),
@@ -105,14 +97,62 @@ _GOAL_RULES: list[tuple[tuple[str, ...], tuple[str, ...], set[str]]] = [
      {"plan_learning_path"}),
 ]
 
+# 假设/咨询式提问：出现即视为「问怎么做」而非「请你现在做」，不绑定必做工具。
+_HYPOTHETICAL_MARKER = (
+    "如果", "怎么做", "怎么办", "该怎么", "要怎么", "如何", "怎样", "怎么才能",
+    "是否可以", "能不能", "可不可以", "可以吗",
+)
+
+
+def _is_hypothetical(question: str) -> bool:
+    """判断是否为假设/how-to 咨询（问方法），而非要求 agent 现在执行动作。"""
+    return any(m in question for m in _HYPOTHETICAL_MARKER)
+
 
 def _required_tool_groups(question: str) -> list[set[str]]:
-    """从问题解析出「完成目标必须成功的工具组」列表（命中的每条规则一组）。"""
+    """从问题解析出「完成目标必须成功的工具组」列表（命中的每条规则一组）。
+    假设/咨询式提问（如「如果…该怎么做」）不绑定必做工具。"""
+    if _is_hypothetical(question):
+        return []
     groups: list[set[str]] = []
     for objs, acts, tools in _GOAL_RULES:
         if any(o in question for o in objs) and any(a in question for a in acts):
             groups.append(set(tools))
     return groups
+
+
+def route_intent(question: str) -> str:
+    """关键词路由。返回 'agent'（做事/规划）或 'tutor'（问答）。
+
+    统一路由与目标识别：命中目标规则（且非假设式）→ agent；否则回退到 _ACTION_KW。
+    这样「更新一下画像」「修改我的画像」等表述不再被漏判为 tutor。"""
+    if _required_tool_groups(question):
+        return "agent"
+    for kw in _ACTION_KW:
+        if kw in question:
+            return "agent"
+    return "tutor"
+
+
+# 声称已完成的标志：出现即视为「成功声明」，不能当作追问放行
+_COMPLETION_CLAIM = (
+    "已更新", "已完成", "已成功", "已设置", "已生成", "已批改", "已保存", "已提交",
+    "更新成功", "设置成功", "生成成功", "updated", "completed", "success", "done",
+)
+# 追问/请求补充信息的标志
+_CLARIFY_MARKER = (
+    "？", "?", "请提供", "请补充", "请告诉", "请问", "需要你", "麻烦提供",
+    "哪些", "哪个", "什么内容", "是否需要", "能否告诉", "告诉我", "补充一下",
+)
+
+
+def _is_clarification(answer: str) -> bool:
+    """判断终答是否为「未声称完成的追问」：含追问标志且不含任何完成声明。"""
+    if not answer:
+        return False
+    if any(c in answer.lower() for c in _COMPLETION_CLAIM):
+        return False
+    return any(m in answer for m in _CLARIFY_MARKER)
 
 
 # 工具契约：handler 的业务失败**应当抛出** tools.errors 里的分类异常
@@ -216,9 +256,25 @@ def ask_agent(
             unmet_required = sorted({
                 t for grp in required_groups if not (grp & successful_tools) for t in grp
             })
-            if unresolved or unmet_required:
+            model_text = response.get("content", "")
+            if unresolved:
+                # 有真实工具失败 → 一律覆盖为失败（无论文本是否像追问）
                 status = "partial_failure" if successful_tools else "tool_failed"
                 problem = sorted(set(unresolved) | set(unmet_required))
+                answer = (
+                    f"操作未完成。缺少执行证据的必要工具：{problem}"
+                    + (f"；已执行工具：{sorted(successful_tools)}" if successful_tools else "")
+                    + "。请补充必要信息后重试，或改用其他方式。"
+                )
+            elif unmet_required and _is_clarification(model_text):
+                # 目标工具未运行、也无失败，且模型在如实追问（未声称完成）：
+                # 这是 spec「模糊需求 agent 自主补全」的正常路径。独立终态，保留具体追问文本。
+                status = "needs_input"
+                answer = model_text
+            elif unmet_required:
+                # 目标工具未运行，但模型给了非追问的（可能虚报完成的）文本 → 覆盖为失败
+                status = "partial_failure" if successful_tools else "tool_failed"
+                problem = sorted(unmet_required)
                 answer = (
                     f"操作未完成。缺少执行证据的必要工具：{problem}"
                     + (f"；已执行工具：{sorted(successful_tools)}" if successful_tools else "")
