@@ -73,6 +73,8 @@ class AgentResponse(BaseModel):
     intent: str               # 'agent' | 'tutor'（用于前端路由标记）
     hitl_pending: bool = False
     approval_id: str | None = None
+    status: str = "ok"        # ok | tool_failed | hitl_pending | budget_exceeded | max_steps
+    failed_tools: list[str] = []  # 因参数反复非法被停用/未执行的工具
 
 
 class ApproveRequest(BaseModel):
@@ -128,6 +130,8 @@ def chat_agent(req: AgentRequest):
             steps=result.get("steps", 0),
             hitl_pending=result.get("hitl_pending", False),
             approval_id=result.get("approval_id"),
+            status=result.get("status", "ok"),
+            failed_tools=result.get("failed_tools", []),
         )
     else:
         tutor_result = ask_tutor(req.question, edu_level=req.edu_level,

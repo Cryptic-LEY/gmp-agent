@@ -123,6 +123,7 @@ def ask_agent(
     steps = 0
     arg_error_count: dict[str, int] = {}
     disabled_tools: set[str] = set()        # E3：参数反复非法而被程序层停用的工具
+    executed_ok: set[str] = set()           # E3：本轮真正成功执行过的工具（用于终答硬校验）
     guard = GuardRail()                     # F1/F2/F3：per-invocation 护栏
     observer = ContextObserver()            # F5：上下文增长斜率 + 工具重复观测
 
@@ -138,6 +139,8 @@ def ask_agent(
         except BudgetExceeded as e:
             return {
                 "answer": f"[已达步数上限] {e}",
+                "status": "budget_exceeded",
+                "failed_tools": sorted(disabled_tools),
                 "tool_calls_log": tool_calls_log,
                 "steps": steps,
                 "observer_alerts": observer.alerts,
@@ -152,8 +155,22 @@ def ask_agent(
         tool_calls = response.get("tool_calls", [])
 
         if not tool_calls:
+            answer = response.get("content", "")
+            status = "ok"
+            # E3 终答硬校验：有工具被停用且本轮无任何工具成功执行时，模型没有任何工具
+            # 结果可依据——此时不信任其自由文本（可能虚报成功），确定性覆盖为如实失败。
+            # 注意仅在「零成功执行」时触发，避免误伤「改用替代工具成功」或「部分成功」。
+            if disabled_tools and not executed_ok:
+                status = "tool_failed"
+                answer = (
+                    f"操作未完成：工具 {sorted(disabled_tools)} 参数校验连续失败、未能执行，"
+                    "本次没有任何工具实际运行。请补充必要信息后重试，或改用其他方式。"
+                )
             return {
-                "answer": response.get("content", ""),
+                "answer": answer,
+                "status": status,
+                "failed_tools": sorted(disabled_tools),
+                "executed_tools": sorted(executed_ok),
                 "tool_calls_log": tool_calls_log,
                 "steps": steps,
                 "observer_alerts": observer.alerts,
@@ -228,6 +245,7 @@ def ask_agent(
                     approval_id = request_approval(name, args, user_id=user_id)
                     return {
                         "hitl_pending": True,
+                        "status": "hitl_pending",
                         "approval_id": approval_id,
                         "pending_tool": name,
                         "answer": "",
@@ -286,6 +304,7 @@ def ask_agent(
                 # 先注入每次退避的错误消息（F4：每次失败回灌模型）
                 for rm in retry_log:
                     messages.append({"role": "tool", "tool_call_id": tc_id, "content": rm})
+                executed_ok.add(name)   # E3：标记该工具确有一次成功执行
                 content = (
                     result if isinstance(result, str)
                     else json.dumps(result, ensure_ascii=False)
@@ -310,6 +329,9 @@ def ask_agent(
     # E7：步数耗尽（MAX_REASONING_STEPS 软上限）
     return {
         "answer": f"[已达 {MAX_REASONING_STEPS} 步上限] 当前进度见工具调用日志。",
+        "status": "max_steps",
+        "failed_tools": sorted(disabled_tools),
+        "executed_tools": sorted(executed_ok),
         "tool_calls_log": tool_calls_log,
         "steps": steps,
         "observer_alerts": observer.alerts,

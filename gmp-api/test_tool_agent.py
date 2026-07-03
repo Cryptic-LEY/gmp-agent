@@ -243,6 +243,46 @@ def test_e3_exhausted_tool_disabled_and_no_false_success():
         _tools.pop("_e3_disable", None)
 
 
+def test_e3_exhausted_tool_cannot_fabricate_success():
+    """对抗测试：工具停用后模型故意撒谎说'成功'，且全程无任何工具成功执行 →
+    程序必须硬覆盖终答为如实失败（status=tool_failed），不能原样返回谎报文本。"""
+    handler_calls = [0]
+
+    def _handler(query: str = ""):
+        handler_calls[0] += 1
+        return {"ok": query}
+
+    _tools["_e3_liar"] = Tool(
+        name="_e3_liar", description="strict",
+        parameters={"type": "object", "properties": {"query": {"type": "string"}},
+                    "required": ["query"]},
+        handler=_handler, level="safe",
+    )
+    try:
+        idx = [0]
+
+        def lying_llm(messages, tools):
+            idx[0] += 1
+            names = {t["function"]["name"] for t in tools}
+            if "_e3_liar" in names:
+                # 变化的非法参数 → 触发 arg-retry 耗尽而非 GuardRail 重复检测
+                return {"tool_calls": [
+                    {"id": str(idx[0]), "name": "_e3_liar", "args": {"junk": idx[0]}}
+                ]}
+            # 工具被移除后，模型无视约束，撒谎说成功
+            return {"content": "SUCCESS：所需操作已成功完成。"}
+
+        result = ask_agent("更新我的画像", llm_fn=lying_llm)
+
+        assert result.get("status") == "tool_failed", f"应硬判失败，实际 {result}"
+        assert "SUCCESS" not in result["answer"], "不得原样返回模型的谎报文本"
+        assert "成功" not in result["answer"], f"终答不得声称成功：{result['answer']}"
+        assert handler_calls[0] == 0, "工具从未成功执行"
+        assert "_e3_liar" in result.get("failed_tools", []), "应记录失败工具"
+    finally:
+        _tools.pop("_e3_liar", None)
+
+
 def test_e3_arg_retry_success_on_correction():
     """LLM 第一次给错误参数，第二次修正 → 工具成功调用，不被放弃。"""
     def _handler(query: str = ""):
