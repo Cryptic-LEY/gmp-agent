@@ -203,6 +203,46 @@ def test_e3_arg_retry_limit_gives_up():
         _tools.pop("_e3_strict", None)
 
 
+def test_e3_exhausted_tool_disabled_and_no_false_success():
+    """arg-retry 耗尽后：① 该工具 schema 不再发给 LLM（程序层确定性禁用）；
+    ② 注入'不得谎称成功'系统约束。用变化的非法参数，确保走 arg-retry 而非 GuardRail 重复检测。"""
+    _tools["_e3_disable"] = Tool(
+        name="_e3_disable", description="strict",
+        parameters={"type": "object", "properties": {"query": {"type": "string"}},
+                    "required": ["query"]},
+        handler=lambda query="": {"ok": query}, level="safe",
+    )
+    try:
+        seen_tool_names: list[set] = []
+        constraint_seen = [False]
+        idx = [0]
+
+        def llm(messages, tools):
+            idx[0] += 1
+            names = {t["function"]["name"] for t in tools}
+            seen_tool_names.append(names)
+            for m in messages:
+                c = m.get("content") or ""
+                if "不得声称" in c or "已停用" in c:
+                    constraint_seen[0] = True
+            if "_e3_disable" in names:
+                # 每轮不同的非法参数（缺 required query，且 hash 不同→绕开 GuardRail 重复检测）
+                return {"tool_calls": [
+                    {"id": str(idx[0]), "name": "_e3_disable", "args": {"junk": idx[0]}}
+                ]}
+            return {"content": "该操作无法完成，请补充主题后重试。"}
+
+        ask_agent("触发耗尽", llm_fn=llm)
+
+        assert constraint_seen[0], "耗尽后应注入'不得谎称成功/已停用'系统约束"
+        assert "_e3_disable" not in seen_tool_names[-1], \
+            "禁用后最后一轮不应再把该工具 schema 发给 LLM"
+        assert any("_e3_disable" not in s for s in seen_tool_names), \
+            "禁用应在某轮后持久生效（schema 被移除）"
+    finally:
+        _tools.pop("_e3_disable", None)
+
+
 def test_e3_arg_retry_success_on_correction():
     """LLM 第一次给错误参数，第二次修正 → 工具成功调用，不被放弃。"""
     def _handler(query: str = ""):

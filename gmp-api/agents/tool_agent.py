@@ -122,6 +122,7 @@ def ask_agent(
     tool_calls_log: list[dict] = []
     steps = 0
     arg_error_count: dict[str, int] = {}
+    disabled_tools: set[str] = set()        # E3：参数反复非法而被程序层停用的工具
     guard = GuardRail()                     # F1/F2/F3：per-invocation 护栏
     observer = ContextObserver()            # F5：上下文增长斜率 + 工具重复观测
 
@@ -142,8 +143,12 @@ def ask_agent(
                 "observer_alerts": observer.alerts,
             }
 
-        # ② 调 LLM
-        response = _call_llm(messages, tool_schemas)
+        # ② 调 LLM（已停用的工具不再下发 schema，程序层确定性禁用，而非仅靠文字提示）
+        active_schemas = (
+            [s for s in tool_schemas if s["function"]["name"] not in disabled_tools]
+            if disabled_tools else tool_schemas
+        )
+        response = _call_llm(messages, active_schemas)
         tool_calls = response.get("tool_calls", [])
 
         if not tool_calls:
@@ -177,6 +182,12 @@ def ask_agent(
             args = tc["args"]
             tc_id = tc["id"]
             tool_calls_log.append({"name": name, "step": steps})
+
+            # E3：已停用工具即使被模型再次调用也不执行（程序层兜底，防绕过 schema 移除）
+            if name in disabled_tools:
+                messages.append({"role": "tool", "tool_call_id": tc_id,
+                                 "content": f"[工具 {name!r} 已停用，忽略本次调用，请改用其他方式。]"})
+                continue
 
             # F5：记录工具重复调用（连续重复计数，供可观测性）
             observer.record_repeat(name)
@@ -232,16 +243,27 @@ def ask_agent(
                 arg_error_count[name] = arg_error_count.get(name, 0) + 1
                 count = arg_error_count[name]
                 if count > TOOL_ARG_RETRY:
+                    # 程序层停用该工具：下一轮不再下发其 schema（确定性，非概率）
+                    disabled_tools.add(name)
                     content = (
                         f"[InvalidArgs 超过最大重试次数 {TOOL_ARG_RETRY}，"
-                        f"放弃工具 {name!r}，请换其他方式回答。]"
+                        f"工具 {name!r} 已停用，本轮不可再调用。]"
                     )
-                else:
-                    remaining = TOOL_ARG_RETRY - count
-                    content = (
-                        f"[InvalidArgs] 参数错误：{e}，"
-                        f"请修正后重试（剩余次数：{remaining}）。"
-                    )
+                    messages.append({"role": "tool", "tool_call_id": tc_id, "content": content})
+                    # 强系统约束：禁止虚报成功，明确后续应对（追问/换工具/如实说明失败）
+                    messages.append({"role": "system", "content": (
+                        f"工具 {name!r} 因参数反复非法已被停用，无法执行。"
+                        "严禁声称该操作已完成或已成功。"
+                        "接下来请：若缺少必要信息，向用户追问；"
+                        "若有其他可用工具可达成目标，改用其他工具；"
+                        "否则如实告知用户该操作未能完成，不要编造结果。"
+                    )})
+                    continue
+                remaining = TOOL_ARG_RETRY - count
+                content = (
+                    f"[InvalidArgs] 参数错误：{e}，"
+                    f"请修正后重试（剩余次数：{remaining}）。"
+                )
                 messages.append({"role": "tool", "tool_call_id": tc_id, "content": content})
                 continue
 
