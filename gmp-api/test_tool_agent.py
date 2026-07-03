@@ -283,6 +283,77 @@ def test_e3_exhausted_tool_cannot_fabricate_success():
         _tools.pop("_e3_liar", None)
 
 
+def test_e3_partial_failure_when_needed_tool_fails(monkeypatch):
+    """漏洞一：辅助工具(查询)成功不得掩盖真正需要的工具(更新)失败。
+    查询成功 + 更新参数耗尽 + 模型谎称更新成功 → 必须 partial_failure，不得整体成功文本。"""
+    import agents.tool_agent as ta
+    monkeypatch.setattr(ta, "MAX_REASONING_STEPS", 10)
+    calls = {"q": 0, "u": 0}
+    _tools["_e3_q"] = Tool(
+        name="_e3_q", description="query",
+        parameters={"type": "object", "properties": {"x": {"type": "string"}}},
+        handler=lambda x="": (calls.__setitem__("q", calls["q"] + 1), {"profile": "data"})[1],
+        level="safe",
+    )
+    _tools["_e3_u"] = Tool(
+        name="_e3_u", description="update",
+        parameters={"type": "object", "properties": {"patch": {"type": "object"}}, "required": ["patch"]},
+        handler=lambda patch=None: (calls.__setitem__("u", calls["u"] + 1), {"ok": True})[1],
+        level="safe",
+    )
+    try:
+        idx = [0]
+
+        def llm(messages, tools):
+            idx[0] += 1
+            names = {t["function"]["name"] for t in tools}
+            if idx[0] == 1:
+                return {"tool_calls": [{"id": "q1", "name": "_e3_q", "args": {"x": "me"}}]}
+            if "_e3_u" in names:
+                return {"tool_calls": [{"id": f"u{idx[0]}", "name": "_e3_u", "args": {"junk": idx[0]}}]}
+            return {"content": "SUCCESS：你的画像已成功更新。"}
+
+        result = ask_agent("更新我的画像", llm_fn=llm)
+        assert result["status"] == "partial_failure", result
+        assert "SUCCESS" not in result["answer"] and "成功" not in result["answer"], result["answer"]
+        assert "_e3_u" in result["failed_tools"], result
+        assert "_e3_q" in result["executed_tools"], result
+        assert calls["u"] == 0, "更新工具从未成功执行"
+        assert calls["q"] == 1
+    finally:
+        _tools.pop("_e3_q", None)
+        _tools.pop("_e3_u", None)
+
+
+def test_e3_handler_error_blocks_false_success():
+    """漏洞二：handler 抛 NotFound 等异常也算失败。模型随后谎称成功 → 必须 tool_failed。"""
+    from tools.errors import NotFoundError
+
+    def _boom(query: str = ""):
+        raise NotFoundError("资源不存在")
+
+    _tools["_e3_boom"] = Tool(
+        name="_e3_boom", description="boom",
+        parameters={"type": "object", "properties": {"query": {"type": "string"}}},
+        handler=_boom, level="safe",
+    )
+    try:
+        idx = [0]
+
+        def llm(messages, tools):
+            idx[0] += 1
+            if idx[0] == 1:
+                return {"tool_calls": [{"id": "1", "name": "_e3_boom", "args": {"query": "x"}}]}
+            return {"content": "SUCCESS：操作已成功完成。"}
+
+        result = ask_agent("执行操作", llm_fn=llm)
+        assert result["status"] == "tool_failed", result
+        assert "SUCCESS" not in result["answer"] and "成功" not in result["answer"], result["answer"]
+        assert "_e3_boom" in result["failed_tools"], result
+    finally:
+        _tools.pop("_e3_boom", None)
+
+
 def test_e3_arg_retry_success_on_correction():
     """LLM 第一次给错误参数，第二次修正 → 工具成功调用，不被放弃。"""
     def _handler(query: str = ""):
