@@ -54,6 +54,17 @@ update_user_profile = Tool(
             "patch": {
                 "type": "object",
                 "description": "要更新的字段，如 {weak_kp: [...], goals: [...]}",
+                # 在 dispatch 前的参数校验就拦截「空 patch / 未知字段」，
+                # 走 InvalidArgs 自修正路径（回灌+次数限制），而非 handler 内的通用 Error。
+                "minProperties": 1,
+                "additionalProperties": False,
+                "properties": {
+                    "edu_level": {"type": "string"},
+                    "major":     {"type": "string"},
+                    "weak_kp":   {"type": "array"},
+                    "goals":     {"type": "array"},
+                    "prefs":     {"type": "object"},
+                },
             },
         },
         "required": ["user_id", "patch"],

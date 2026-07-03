@@ -199,3 +199,25 @@ def test_update_profile_invalid_fields_raises():
     with pytest.raises(InvalidArgsError):
         dispatch("update_user_profile",
                  {"user_id": "audit-user", "patch": {"not_a_column": 1}}, authorized=True)
+
+
+# ── E3 补充：patch schema 在 dispatch 前拦截空/无效字段（进入 InvalidArgs 自修正路径）──
+
+def test_update_profile_schema_rejects_empty_patch():
+    """空 patch 应被 validate_args（dispatch 前）拒绝，从而走 InvalidArgs 自修正而非通用 Error。"""
+    t = get_tool("update_user_profile")
+    with pytest.raises(InvalidArgsError):
+        validate_args(t.parameters, {"user_id": "u", "patch": {}})
+
+
+def test_update_profile_schema_rejects_invalid_field():
+    """含未知字段的 patch 应被 validate_args（additionalProperties=false）拒绝。"""
+    t = get_tool("update_user_profile")
+    with pytest.raises(InvalidArgsError):
+        validate_args(t.parameters, {"user_id": "u", "patch": {"not_a_column": 1}})
+
+
+def test_update_profile_schema_accepts_valid_patch():
+    """合法字段的 patch 应通过 schema 校验。"""
+    t = get_tool("update_user_profile")
+    validate_args(t.parameters, {"user_id": "u", "patch": {"weak_kp": ["洁净区"]}})
