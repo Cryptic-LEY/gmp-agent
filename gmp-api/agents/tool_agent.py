@@ -141,7 +141,7 @@ def ask_agent(
             return {
                 "answer": f"[已达步数上限] {e}",
                 "status": "budget_exceeded",
-                "failed_tools": sorted(set(failed_tools) - successful_tools),
+                "failed_tools": sorted(failed_tools),
                 "executed_tools": sorted(successful_tools),
                 "tool_calls_log": tool_calls_log,
                 "steps": steps,
@@ -157,10 +157,10 @@ def ask_agent(
         tool_calls = response.get("tool_calls", [])
 
         if not tool_calls:
-            # E3 终答硬校验（按具体工具）：unresolved = 结局为失败且未被后续成功覆盖的工具。
-            # 只要存在 unresolved，模型对这些工具没有成功结果可依据——不信任其自由文本，
-            # 确定性用程序答案覆盖，避免「状态说失败、正文说成功」的矛盾。
-            unresolved = sorted(set(failed_tools) - successful_tools)
+            # E3 终答硬校验（按具体工具）：failed_tools 本身即「最近结局为失败、尚未被
+            # 后续成功覆盖」的工具（成功时 pop、失败时写入）。不能再减 successful_tools——
+            # 那会把「同一工具先成功后失败」的后一次失败错误地掩盖掉。
+            unresolved = sorted(failed_tools)
             if unresolved:
                 status = "partial_failure" if successful_tools else "tool_failed"
                 answer = (
@@ -230,6 +230,7 @@ def ask_agent(
 
             t = get_tool(name)
             if t is None:
+                failed_tools[name] = "NotFound：工具未注册"
                 messages.append({
                     "role": "tool", "tool_call_id": tc_id,
                     "content": f"[NotFound] 工具 {name!r} 未注册，请换用其他工具。",
@@ -341,7 +342,7 @@ def ask_agent(
     return {
         "answer": f"[已达 {MAX_REASONING_STEPS} 步上限] 当前进度见工具调用日志。",
         "status": "max_steps",
-        "failed_tools": sorted(set(failed_tools) - successful_tools),
+        "failed_tools": sorted(failed_tools),
         "executed_tools": sorted(successful_tools),
         "tool_calls_log": tool_calls_log,
         "steps": steps,

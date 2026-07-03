@@ -354,6 +354,57 @@ def test_e3_handler_error_blocks_false_success():
         _tools.pop("_e3_boom", None)
 
 
+def test_e3_success_then_failure_not_masked(monkeypatch):
+    """漏洞一：同一工具先成功后失败，后一次失败不得被历史成功掩盖。"""
+    import agents.tool_agent as ta
+    monkeypatch.setattr(ta, "MAX_REASONING_STEPS", 10)
+    from tools.errors import NotFoundError
+    state = {"n": 0}
+
+    def _flaky(query: str = ""):
+        state["n"] += 1
+        if state["n"] == 1:
+            return {"ok": True}          # 第一次成功
+        raise NotFoundError("资源在第二次调用时消失")  # 第二次失败
+
+    _tools["_e3_flaky"] = Tool(
+        name="_e3_flaky", description="flaky",
+        parameters={"type": "object", "properties": {"query": {"type": "string"}}},
+        handler=_flaky, level="safe",
+    )
+    try:
+        idx = [0]
+
+        def llm(messages, tools):
+            idx[0] += 1
+            if idx[0] <= 2:
+                return {"tool_calls": [{"id": str(idx[0]), "name": "_e3_flaky", "args": {"query": "x"}}]}
+            return {"content": "SUCCESS：两次操作都已成功完成。"}
+
+        result = ask_agent("执行两次", llm_fn=llm)
+        assert result["status"] != "ok", f"后一次失败不应被历史成功掩盖：{result}"
+        assert "SUCCESS" not in result["answer"] and "成功" not in result["answer"], result["answer"]
+        assert "_e3_flaky" in result["failed_tools"], result
+    finally:
+        _tools.pop("_e3_flaky", None)
+
+
+def test_e3_unregistered_tool_blocks_false_success():
+    """漏洞二：模型调用未注册工具后谎称成功 → 必须记失败并 tool_failed。"""
+    idx = [0]
+
+    def llm(messages, tools):
+        idx[0] += 1
+        if idx[0] == 1:
+            return {"tool_calls": [{"id": "1", "name": "_e3_ghost_tool", "args": {}}]}
+        return {"content": "SUCCESS：不存在的操作已成功完成。"}
+
+    result = ask_agent("调用幽灵工具", llm_fn=llm)
+    assert result["status"] == "tool_failed", result
+    assert "SUCCESS" not in result["answer"] and "成功" not in result["answer"], result["answer"]
+    assert "_e3_ghost_tool" in result["failed_tools"], result
+
+
 def test_e3_arg_retry_success_on_correction():
     """LLM 第一次给错误参数，第二次修正 → 工具成功调用，不被放弃。"""
     def _handler(query: str = ""):
