@@ -405,6 +405,42 @@ def test_e3_unregistered_tool_blocks_false_success():
     assert "_e3_ghost_tool" in result["failed_tools"], result
 
 
+def test_e3_no_tool_executed_flagged():
+    """更高层边界：模型全程不调用任何工具却谎称成功 → status=no_tool_executed（暴露无执行证据）。"""
+    def llm(messages, tools):
+        return {"content": "SUCCESS：你的画像已更新。"}
+
+    result = ask_agent("更新我的画像", llm_fn=llm)
+    assert result["status"] == "no_tool_executed", result
+    assert result["executed_tools"] == [], result
+    assert result["failed_tools"] == [], result
+
+
+def test_e3_handler_returns_failure_dict_recorded_as_failure():
+    """工具契约兜底：handler 用返回值(ok=false/error)表达业务失败而非抛异常 → 仍判为失败。"""
+    _tools["_e3_softfail"] = Tool(
+        name="_e3_softfail", description="soft fail",
+        parameters={"type": "object", "properties": {"x": {"type": "string"}}},
+        handler=lambda x="": {"ok": False, "error": "业务失败但没抛异常"},
+        level="safe",
+    )
+    try:
+        idx = [0]
+
+        def llm(messages, tools):
+            idx[0] += 1
+            if idx[0] == 1:
+                return {"tool_calls": [{"id": "1", "name": "_e3_softfail", "args": {"x": "y"}}]}
+            return {"content": "SUCCESS：已完成。"}
+
+        result = ask_agent("执行", llm_fn=llm)
+        assert result["status"] == "tool_failed", result
+        assert "_e3_softfail" in result["failed_tools"], result
+        assert "_e3_softfail" not in result["executed_tools"], result
+    finally:
+        _tools.pop("_e3_softfail", None)
+
+
 def test_e3_arg_retry_success_on_correction():
     """LLM 第一次给错误参数，第二次修正 → 工具成功调用，不被放弃。"""
     def _handler(query: str = ""):

@@ -73,7 +73,7 @@ class AgentResponse(BaseModel):
     intent: str               # 'agent' | 'tutor'（用于前端路由标记）
     hitl_pending: bool = False
     approval_id: str | None = None
-    status: str = "ok"        # ok | tool_failed | partial_failure | hitl_pending | budget_exceeded | max_steps
+    status: str = "ok"        # ok | tool_failed | partial_failure | no_tool_executed | hitl_pending | budget_exceeded | max_steps
     failed_tools: list[str] = []  # 结局为失败且未被后续成功覆盖的工具
 
 

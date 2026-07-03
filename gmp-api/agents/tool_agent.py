@@ -86,6 +86,27 @@ def route_intent(question: str) -> str:
     return "tutor"
 
 
+# 工具契约：handler 的业务失败**应当抛出** tools.errors 里的分类异常
+# （NotFound/Forbidden/Upstream/Timeout/InvalidArgs）。若 handler 违反契约、用返回值
+# 表达失败（ok=false / success=false / error / status∈失败集），下面的兜底会将其判为失败，
+# 避免业务失败被记成功。注意：正常返回不得使用这些失败语义键（现有内置工具均未使用）。
+_FAILURE_STATUS = {"failed", "error", "failure", "fail"}
+
+
+def _result_signals_failure(result) -> str | None:
+    """检测 handler 用返回值（而非异常）表达的业务失败，返回原因；无则 None。"""
+    if isinstance(result, dict):
+        if result.get("ok") is False:
+            return f"handler 返回 ok=false：{result.get('error') or result.get('message') or ''}".strip("：")
+        if result.get("success") is False:
+            return "handler 返回 success=false"
+        if result.get("error"):
+            return f"handler 返回 error：{result.get('error')}"
+        if str(result.get("status", "")).lower() in _FAILURE_STATUS:
+            return f"handler 返回 status={result.get('status')}"
+    return None
+
+
 # ── 7 步 FC 循环（带 06 护栏） ────────────────────────────────────────────────
 
 def ask_agent(
@@ -168,6 +189,12 @@ def ask_agent(
                     + (f"；已执行工具：{sorted(successful_tools)}" if successful_tools else "")
                     + "。请补充必要信息后重试，或改用其他方式。"
                 )
+            elif not successful_tools:
+                # 更高层边界：全程未执行任何工具却给出终答（可能是澄清追问，也可能是
+                # 无执行证据的虚报）。程序无法证伪文本，但确定性暴露「无工具执行证据」，
+                # 交由调用方/前端对「行动类任务的成功声明」施加确认策略。不覆盖答案文本。
+                status = "no_tool_executed"
+                answer = response.get("content", "")
             else:
                 status = "ok"
                 answer = response.get("content", "")
@@ -311,12 +338,18 @@ def ask_agent(
                 # 先注入每次退避的错误消息（F4：每次失败回灌模型）
                 for rm in retry_log:
                     messages.append({"role": "tool", "tool_call_id": tc_id, "content": rm})
-                successful_tools.add(name)      # E3：成功执行
-                failed_tools.pop(name, None)    # E3：清除该工具此前的失败标记
-                content = (
-                    result if isinstance(result, str)
-                    else json.dumps(result, ensure_ascii=False)
-                )
+                # 工具契约兜底：handler 用返回值表达的业务失败，判为失败而非成功
+                soft_fail = _result_signals_failure(result)
+                if soft_fail:
+                    failed_tools[name] = f"业务失败：{soft_fail}"
+                    content = f"[工具业务失败] {name}：{soft_fail}"
+                else:
+                    successful_tools.add(name)      # E3：成功执行
+                    failed_tools.pop(name, None)    # E3：清除该工具此前的失败标记
+                    content = (
+                        result if isinstance(result, str)
+                        else json.dumps(result, ensure_ascii=False)
+                    )
             except NotFoundError as e:
                 content = f"[NotFound] {e}，请换用其他方式。"
                 failed_tools[name] = f"NotFound：{e}"
