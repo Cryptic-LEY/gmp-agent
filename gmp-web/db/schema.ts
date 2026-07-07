@@ -160,6 +160,11 @@ export const userGameState = mysqlTable('user_game_state', {
   maxStreak: int('max_streak').notNull().default(0),
   punishUntil: datetime('punish_until', { mode: 'string', fsp: 3 }),
   lastLoginDate: date('last_login_date', { mode: 'string' }),
+  simulationCoins: int('simulation_coins').notNull().default(0),
+  simulationGems: int('simulation_gems').notNull().default(0),
+  simulationTrophies: int('simulation_trophies').notNull().default(0),
+  simulationUnlockedHeroesJson: text('simulation_unlocked_heroes_json'),
+  simulationWalletSyncedAt: datetime('simulation_wallet_synced_at', { mode: 'string', fsp: 3 }),
 })
 
 export const checkinLog = mysqlTable('checkin_log', {
@@ -189,6 +194,15 @@ export const simulationProjectProgress = mysqlTable('simulation_project_progress
   updatedAt: datetime('updated_at', { mode: 'string', fsp: 3 }).notNull().default(now),
 }, table => [
   primaryKey({ columns: [table.userId, table.projectId] }),
+])
+
+export const simulationStoryRoundProgress = mysqlTable('simulation_story_round_progress', {
+  userId: varchar('user_id', { length: 191 }).notNull().references(() => users.userId),
+  projectId: int('project_id').notNull(),
+  roundId: varchar('round_id', { length: 191 }).notNull(),
+  watchedAt: datetime('watched_at', { mode: 'string', fsp: 3 }).notNull().default(now),
+}, table => [
+  primaryKey({ columns: [table.userId, table.projectId, table.roundId] }),
 ])
 
 export const regLibrary = mysqlTable('reg_library', {

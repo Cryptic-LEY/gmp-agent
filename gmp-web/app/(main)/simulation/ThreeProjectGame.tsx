@@ -4588,6 +4588,7 @@ export default function ThreeProjectGame({
   const storyTasksCompletedRef = useRef<string[]>([])
   const completedStoryRoundIdsRef = useRef<string[]>([])
   const watchedStoryRoundIdsRef = useRef<string[]>([])
+  const watchedStoryRoundProjectIdRef = useRef(project.id)
   const lastNarrationTaskIdRef = useRef('')
   const handledRoomEventRef = useRef('')
   const playerDownedRef = useRef(false)
@@ -5552,9 +5553,7 @@ export default function ThreeProjectGame({
   }, [watchedStoryRoundIds])
 
   useEffect(() => {
-    const storedRoundIds = readWatchedStoryRoundIds(project.id)
-    watchedStoryRoundIdsRef.current = storedRoundIds
-    setWatchedStoryRoundIds(storedRoundIds)
+    hydrateWatchedStoryRoundIds(project.id)
   }, [project.id])
 
   useEffect(() => {
@@ -5866,34 +5865,119 @@ export default function ThreeProjectGame({
     return `gmp-story-round-watch:v1:${userId}:project-${projectId}`
   }
 
-  function readWatchedStoryRoundIds(projectId = project.id) {
+  function normalizeWatchedStoryRoundIds(value: unknown) {
+    return Array.isArray(value)
+      ? [...new Set(value.filter((item): item is string => typeof item === 'string' && Boolean(item.trim())).map(item => item.trim()))]
+      : []
+  }
+
+  function readLegacyWatchedStoryRoundIds(projectId = project.id) {
     if (typeof window === 'undefined') return []
     try {
       const raw = localStorage.getItem(storyRoundWatchStorageKey(projectId))
       const parsed = raw ? JSON.parse(raw) : []
-      return Array.isArray(parsed)
-        ? [...new Set(parsed.filter((item): item is string => typeof item === 'string' && Boolean(item.trim())).map(item => item.trim()))]
-        : []
+      return normalizeWatchedStoryRoundIds(parsed)
     } catch {
       return []
     }
   }
 
-  function writeWatchedStoryRoundIds(roundIds: string[], projectId = project.id) {
+  function clearLegacyWatchedStoryRoundIds(projectId = project.id) {
     if (typeof window === 'undefined') return
     try {
-      localStorage.setItem(storyRoundWatchStorageKey(projectId), JSON.stringify(roundIds))
+      localStorage.removeItem(storyRoundWatchStorageKey(projectId))
     } catch {
-      // Local storage is only an unlock convenience; gameplay should continue if it is unavailable.
+      // Legacy browser storage is best-effort cleanup after database migration.
     }
+  }
+
+  async function fetchWatchedStoryRoundIds(projectId = project.id) {
+    if (typeof window === 'undefined') return []
+    const token = localStorage.getItem('token')
+    if (!token) return []
+    const response = await fetch(`/api/game/story-round-progress?projectId=${encodeURIComponent(String(projectId))}`, {
+      headers: { Authorization: `Bearer ${token}` },
+      cache: 'no-store',
+    })
+    if (!response.ok) return []
+    const data = await response.json().catch(() => ({})) as { watchedRoundIds?: unknown }
+    return normalizeWatchedStoryRoundIds(data.watchedRoundIds)
+  }
+
+  async function saveWatchedStoryRoundIds(projectId: number, roundIds: string[]) {
+    if (typeof window === 'undefined' || !roundIds.length) return []
+    const token = localStorage.getItem('token')
+    if (!token) return []
+    const response = await fetch('/api/game/story-round-progress', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({ projectId, roundIds }),
+      keepalive: true,
+    })
+    if (!response.ok) return []
+    const data = await response.json().catch(() => ({})) as { watchedRoundIds?: unknown }
+    return normalizeWatchedStoryRoundIds(data.watchedRoundIds)
+  }
+
+  function applyWatchedStoryRoundIds(roundIds: string[]) {
+    const normalizedRoundIds = normalizeWatchedStoryRoundIds(roundIds)
+    watchedStoryRoundIdsRef.current = normalizedRoundIds
+    setWatchedStoryRoundIds(normalizedRoundIds)
+  }
+
+  function mergeWatchedStoryRoundIds(roundIds: string[]) {
+    const merged = normalizeWatchedStoryRoundIds([...watchedStoryRoundIdsRef.current, ...roundIds])
+    applyWatchedStoryRoundIds(merged)
+    return merged
+  }
+
+  function migrateLegacyWatchedStoryRoundIds(projectId: number, legacyRoundIds: string[], serverRoundIds: string[]) {
+    if (!legacyRoundIds.length) return
+    const missingLegacyIds = legacyRoundIds.filter(roundId => !serverRoundIds.includes(roundId))
+    if (!missingLegacyIds.length) {
+      clearLegacyWatchedStoryRoundIds(projectId)
+      return
+    }
+    void saveWatchedStoryRoundIds(projectId, missingLegacyIds).then(savedRoundIds => {
+      if (watchedStoryRoundProjectIdRef.current !== projectId) return
+      if (savedRoundIds.length) mergeWatchedStoryRoundIds(savedRoundIds)
+      if (legacyRoundIds.every(roundId => savedRoundIds.includes(roundId))) {
+        clearLegacyWatchedStoryRoundIds(projectId)
+      }
+    }).catch(() => undefined)
   }
 
   function markStoryRoundWatched(roundId: string) {
     if (!roundId || watchedStoryRoundIdsRef.current.includes(roundId)) return
-    const nextWatched = [...watchedStoryRoundIdsRef.current, roundId]
-    watchedStoryRoundIdsRef.current = nextWatched
-    setWatchedStoryRoundIds(nextWatched)
-    writeWatchedStoryRoundIds(nextWatched)
+    const projectId = project.id
+    const nextWatched = mergeWatchedStoryRoundIds([roundId])
+    void saveWatchedStoryRoundIds(projectId, [roundId]).then(savedRoundIds => {
+      if (watchedStoryRoundProjectIdRef.current !== projectId) return
+      if (savedRoundIds.length) mergeWatchedStoryRoundIds(savedRoundIds)
+    }).catch(() => {
+      if (watchedStoryRoundProjectIdRef.current !== projectId) return
+      watchedStoryRoundIdsRef.current = nextWatched
+    })
+  }
+
+  function hydrateWatchedStoryRoundIds(projectId: number) {
+    watchedStoryRoundProjectIdRef.current = projectId
+    const legacyRoundIds = readLegacyWatchedStoryRoundIds(projectId)
+    applyWatchedStoryRoundIds(legacyRoundIds)
+
+    try {
+      void fetchWatchedStoryRoundIds(projectId).then(serverRoundIds => {
+        if (watchedStoryRoundProjectIdRef.current !== projectId) return
+        const mergedRoundIds = mergeWatchedStoryRoundIds([...legacyRoundIds, ...serverRoundIds])
+        migrateLegacyWatchedStoryRoundIds(projectId, legacyRoundIds, serverRoundIds)
+        if (!mergedRoundIds.length) applyWatchedStoryRoundIds([])
+      }).catch(() => undefined)
+    } catch {
+      // Story round progress now lives on the server; old local data is only a migration source.
+    }
   }
 
   function markLocalStoryDialogueReady(roundId = activeStoryRound?.id ?? '') {
@@ -6170,11 +6254,12 @@ export default function ThreeProjectGame({
   }
 
   function skipBattleIntro(force = false) {
-    if (!force && !battleIntroSkipAvailable) {
+    const forceSkip = force === true
+    if (!forceSkip && !battleIntroSkipAvailable) {
       setGameMessage('本段剧情还没有完整播放过，看完一次后再次进入即可跳过。', 1600)
       return
     }
-    if (force && teamRoomId) return
+    if (forceSkip && teamRoomId) return
     if (teamRoomId) {
       const roundId = activeStoryRound?.id
       if (!roundId) return
@@ -10991,7 +11076,7 @@ function StoryCinematicOverlay({
       <div className={styles.storyCinematicTop}>
         <strong>[主线] {projectTitle}<span>{roundTitle}</span></strong>
         {canSkip && (
-          <button type="button" onClick={onSkip} disabled={skipDisabled} aria-label={skipHint} title={skipHint}>
+          <button type="button" onClick={() => onSkip()} disabled={skipDisabled} aria-label={skipHint} title={skipHint}>
             跳过 <X size={16} />
           </button>
         )}

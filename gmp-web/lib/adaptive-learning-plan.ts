@@ -205,37 +205,6 @@ function sortAdaptivePlan(plan: PlanItem[]) {
   })
 }
 
-// 专科 training_id 与 kp_proj_col 是多对一（如 T06/T07 共享"专-项目6"），
-// 按行直出会产生同名 project_name 的重复条目，这里按 project_name 合并。
-function mergeDuplicateProjectItems(plan: PlanItem[]): PlanItem[] {
-  const groups = new Map<string, PlanItem[]>()
-  for (const item of plan) {
-    const group = groups.get(item.project_name)
-    if (group) group.push(item)
-    else groups.set(item.project_name, [item])
-  }
-
-  return Array.from(groups.values()).map(group => {
-    if (group.length === 1) return group[0]
-
-    const primary = group.reduce((best, item) =>
-      (item.adaptive_score ?? 0) > (best.adaptive_score ?? 0) ? item : best)
-    const masteryValues = group.map(item => item.mastery_avg).filter((value): value is number => value != null)
-
-    return {
-      ...primary,
-      wrong: group.reduce((sum, item) => sum + item.wrong, 0),
-      total: group.reduce((sum, item) => sum + item.total, 0),
-      evidence: Array.from(new Set(group.flatMap(item => item.evidence ?? []))),
-      recommended_actions: Array.from(new Set(group.flatMap(item => item.recommended_actions ?? []))),
-      mastery_avg: masteryValues.length
-        ? Math.round(masteryValues.reduce((sum, value) => sum + value, 0) / masteryValues.length)
-        : null,
-      study_minutes: group.reduce((sum, item) => sum + (item.study_minutes ?? 0), 0),
-    }
-  })
-}
-
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === 'object' && !Array.isArray(value))
 }
@@ -459,7 +428,7 @@ export async function buildAdaptiveLearningPlan(
       }
     })
 
-  const sortedPlan = sortAdaptivePlan(mergeDuplicateProjectItems(adaptivePlan))
+  const sortedPlan = sortAdaptivePlan(adaptivePlan)
   const fallbackScheme = buildPersonalizedScheme(sortedPlan, latestPlan.score, {
     summary: buildRuleSummary(sortedPlan, latestPlan.score),
     aiFocus: buildRuleFocus(sortedPlan, major),

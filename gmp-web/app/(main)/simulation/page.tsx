@@ -1654,6 +1654,47 @@ function normalizeWallet(storedWallet?: Partial<Wallet> | null): Wallet {
   }
 }
 
+function normalizeServerWallet(value: unknown): Wallet {
+  const record = value && typeof value === 'object' ? value as Record<string, unknown> : {}
+  const unlockedHeroIds = Array.isArray(record.unlockedHeroIds)
+    ? record.unlockedHeroIds.filter((modelId): modelId is PlayerModelId => isPlayerModelId(modelId) && isKnownPlayerModelUnlockId(modelId))
+    : []
+
+  return normalizeWallet({
+    coins: Number(record.coins) || 0,
+    gems: Number(record.gems) || 0,
+    trophies: Number(record.trophies) || 0,
+    inventory: {
+      ...DEFAULT_WALLET.inventory,
+      playerModels: unlockedHeroIds,
+    },
+  })
+}
+
+function mergeWalletForMigration(localWallet: Wallet, serverWallet: Wallet): Wallet {
+  const playerModels = Array.from(new Set([
+    ...serverWallet.inventory.playerModels,
+    ...localWallet.inventory.playerModels,
+  ]))
+  const playerModelId = playerModels.includes(localWallet.inventory.playerModelId)
+    ? localWallet.inventory.playerModelId
+    : playerModels.includes(serverWallet.inventory.playerModelId)
+      ? serverWallet.inventory.playerModelId
+      : DEFAULT_PLAYER_MODEL_ID
+
+  return normalizeWallet({
+    ...localWallet,
+    coins: Math.max(localWallet.coins, serverWallet.coins),
+    gems: Math.max(localWallet.gems, serverWallet.gems),
+    trophies: Math.max(localWallet.trophies, serverWallet.trophies),
+    inventory: {
+      ...localWallet.inventory,
+      playerModels,
+      playerModelId,
+    },
+  })
+}
+
 function clampSettingPercent(value: unknown, fallback: number) {
   const numberValue = Number(value)
   if (!Number.isFinite(numberValue)) return fallback
@@ -1950,6 +1991,8 @@ export default function SimulationPage() {
   const simulationHpRef = useRef(DEMO_HP)
   const battleHpRef = useRef(DEMO_HP)
   const walletRef = useRef<Wallet>(wallet)
+  const walletSyncTimerRef = useRef<number | null>(null)
+  const lastWalletSyncPayloadRef = useRef('')
   const hpRecoveryEndsAtRef = useRef<number | null>(null)
   const hpRecoveryStateRef = useRef<HpRecoveryState | null>(null)
   const hallMusicRef = useRef<HTMLAudioElement | null>(null)
@@ -1962,6 +2005,62 @@ export default function SimulationPage() {
   useEffect(() => {
     walletRef.current = wallet
   }, [wallet])
+
+  function walletSyncPayload(nextWallet: Wallet) {
+    return {
+      coins: nextWallet.coins,
+      gems: nextWallet.gems,
+      trophies: nextWallet.trophies,
+      unlockedHeroIds: nextWallet.inventory.playerModels,
+    }
+  }
+
+  async function postWalletSnapshot(nextWallet: Wallet) {
+    const token = readTeamAuthToken()
+    if (!token) return
+
+    const payload = walletSyncPayload(nextWallet)
+    const payloadKey = JSON.stringify(payload)
+    if (lastWalletSyncPayloadRef.current === payloadKey) return
+
+    try {
+      const response = await fetch('/api/game/wallet', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify(payload),
+        keepalive: true,
+      })
+      if (response.ok) {
+        lastWalletSyncPayloadRef.current = payloadKey
+      }
+    } catch {
+      // The local wallet remains available; the next wallet change or page launch will retry.
+    }
+  }
+
+  function queueWalletSnapshot(nextWallet: Wallet, delay = 800) {
+    if (typeof window === 'undefined') return
+    if (walletSyncTimerRef.current !== null) {
+      window.clearTimeout(walletSyncTimerRef.current)
+    }
+    walletSyncTimerRef.current = window.setTimeout(() => {
+      walletSyncTimerRef.current = null
+      void postWalletSnapshot(nextWallet)
+    }, delay)
+  }
+
+  function flushWalletSnapshot() {
+    if (typeof window !== 'undefined' && walletSyncTimerRef.current !== null) {
+      window.clearTimeout(walletSyncTimerRef.current)
+      walletSyncTimerRef.current = null
+    }
+    void postWalletSnapshot(walletRef.current)
+  }
+
+  useEffect(() => () => flushWalletSnapshot(), [])
 
   useEffect(() => {
     simulationHpRef.current = simulationHp
@@ -1977,6 +2076,7 @@ export default function SimulationPage() {
       if (currentWallet.trophies === nextTrophies) return currentWallet
       const syncedWallet = { ...currentWallet, trophies: nextTrophies }
       localStorage.setItem(scopedStorageKey(WALLET_KEY), JSON.stringify(syncedWallet))
+      queueWalletSnapshot(syncedWallet)
       return syncedWallet
     })
   }
@@ -2089,11 +2189,16 @@ export default function SimulationPage() {
     setAvatarUrl(localStorage.getItem('avatarUrl'))
 
     let initialProgress: ProjectProgress = {}
+    let initialWallet = DEFAULT_WALLET
+    let hasSavedWallet = false
     const savedWallet = localStorage.getItem(walletKey)
     if (savedWallet) {
       try {
         const storedWallet = JSON.parse(savedWallet) as Partial<Wallet>
-        setWallet(normalizeWallet(storedWallet))
+        initialWallet = normalizeWallet(storedWallet)
+        hasSavedWallet = true
+        walletRef.current = initialWallet
+        setWallet(initialWallet)
       } catch {
         localStorage.removeItem(walletKey)
       }
@@ -2176,16 +2281,18 @@ export default function SimulationPage() {
       fetch('/api/game/project-progress', { headers: { Authorization: `Bearer ${token}` }, cache: 'no-store' }),
       fetch('/api/course/overview', { headers: { Authorization: `Bearer ${token}` }, cache: 'no-store' }),
       fetch('/api/smart-missions', { headers: { Authorization: `Bearer ${token}` }, cache: 'no-store' }),
+      fetch('/api/game/wallet', { headers: { Authorization: `Bearer ${token}` }, cache: 'no-store' }),
     ])
-      .then(async ([gameResponse, profileResponse, casesResponse, progressResponse, courseResponse, smartMissionResponse]) => ({
+      .then(async ([gameResponse, profileResponse, casesResponse, progressResponse, courseResponse, smartMissionResponse, walletResponse]) => ({
         game: gameResponse.ok ? await gameResponse.json() : null,
         profile: profileResponse.ok ? await profileResponse.json() : null,
         cases: casesResponse.ok ? await casesResponse.json() : null,
         progress: progressResponse.ok ? await progressResponse.json() : null,
         course: courseResponse.ok ? await courseResponse.json() : null,
         smartMission: smartMissionResponse.ok ? await smartMissionResponse.json() : null,
+        serverWallet: walletResponse.ok ? await walletResponse.json() : null,
       }))
-      .then(({ game, profile, cases, progress, course, smartMission }) => {
+      .then(({ game, profile, cases, progress, course, smartMission, serverWallet }) => {
         if (game) {
           setPlayer({
             xp: game.xp ?? FALLBACK_PLAYER.xp,
@@ -2223,6 +2330,17 @@ export default function SimulationPage() {
           })
         }
         if (smartMission) setSmartMission(smartMission)
+        if (serverWallet?.wallet) {
+          const restoredWallet = normalizeServerWallet(serverWallet.wallet)
+          const nextWallet = hasSavedWallet
+            ? mergeWalletForMigration(initialWallet, restoredWallet)
+            : restoredWallet
+          initialWallet = nextWallet
+          walletRef.current = nextWallet
+          setWallet(nextWallet)
+          localStorage.setItem(walletKey, JSON.stringify(nextWallet))
+        }
+        window.setTimeout(() => queueWalletSnapshot(walletRef.current ?? initialWallet, 500), 300)
         setMajor(profile?.major || '药学')
         if (cases?.categories) {
           setCaseCatalog(cases.categories.flatMap((category: {
@@ -2542,6 +2660,7 @@ export default function SimulationPage() {
       if (nextWallet !== baseWallet) {
         walletRef.current = nextWallet
         localStorage.setItem(scopedStorageKey(WALLET_KEY), JSON.stringify(nextWallet))
+        queueWalletSnapshot(nextWallet)
       }
       return nextWallet
     })
@@ -3875,6 +3994,7 @@ export default function SimulationPage() {
     }
     walletRef.current = nextWallet
     localStorage.setItem(scopedStorageKey(WALLET_KEY), JSON.stringify(nextWallet))
+    queueWalletSnapshot(nextWallet)
     setWallet(nextWallet)
     return true
   }

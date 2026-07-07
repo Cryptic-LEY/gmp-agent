@@ -37,7 +37,7 @@ interface Chapter {
 }
 
 interface Overview {
-  user: { displayName: string; eduLevel: string; major: string; className: string }
+  user: { displayName: string; eduLevel: string; major: string; className: string; teacherName?: string }
   summary: {
     totalChapters: number
     completedChapters: number
@@ -207,6 +207,7 @@ export default function CourseHomePage() {
               {user.eduLevel === 'undergraduate' ? '本科' : '专科'}
               {user.major && ` · ${user.major}`}
               {user.className && ` · ${user.className}`}
+              {user.teacherName && ` · 老师：${user.teacherName}`}
             </p>
 
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 14, maxWidth: 600 }}>

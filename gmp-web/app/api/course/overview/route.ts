@@ -65,6 +65,14 @@ export async function GET(req: NextRequest) {
   const eduCn = eduLevel === 'undergraduate' ? '本科' : '专科'
 
   const [user] = await db.select().from(users).where(eq(users.userId, userId)).limit(1)
+  let teacherName = ''
+  if (user?.teacherUserId) {
+    const [teacher] = await db.select({
+      displayName: users.displayName,
+      realName: users.realName,
+    }).from(users).where(eq(users.userId, user.teacherUserId)).limit(1)
+    teacherName = teacher?.realName?.trim() || teacher?.displayName || ''
+  }
   const projects = await db.select().from(trainingProjects)
   const allScores = await db.select().from(moduleScores)
     .where(eq(moduleScores.userId, userId))
@@ -299,6 +307,7 @@ export async function GET(req: NextRequest) {
       eduLevel,
       major: latestPlan?.major ?? user?.major ?? '',
       className: user?.className ?? '',
+      teacherName,
     },
     summary: {
       totalChapters: chapters.length,

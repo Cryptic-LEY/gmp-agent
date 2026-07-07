@@ -16,6 +16,7 @@ import {
 } from '@/lib/simulation/project-missions'
 import { CARRIER_ROUTES } from '@/lib/simulation/project7'
 import { ensureSimulationProjectProgressTable, isSimulationMedal } from '@/lib/simulation/project-progress-store'
+import { ensureSimulationWalletRowsForStudents, parseHeroJson } from '@/lib/simulation/wallet-store'
 import {
   TEAM_COMBAT_ROLES,
   ensureTeamCollaborationSchema,
@@ -24,7 +25,7 @@ import {
   roleCardsForTeamProject,
 } from '@/lib/team-collaboration'
 
-type SimulationConfigScope = 'map' | 'project' | 'character'
+type SimulationConfigScope = 'map' | 'project' | 'character' | 'story' | 'skill' | 'tool'
 type SimulationEntityStatus = 'active' | 'disabled' | 'draft'
 
 interface ProgressRow extends RowDataPacket {
@@ -142,11 +143,36 @@ interface SimulationMemberRow extends RowDataPacket {
   streak_days: number | null
   max_streak: number | null
   last_login_date: string | null
+  simulation_coins: number | null
+  simulation_gems: number | null
+  simulation_trophies: number | null
+  simulation_unlocked_heroes_json: string | null
+  simulation_wallet_synced_at: string | null
 }
 
 const DEFAULT_CARRIER = CARRIER_ROUTES[0].primaryCarriers[0]
 const PUBLIC_SIMULATION_ROOT = path.resolve(process.cwd(), 'public', 'simulation')
-const CONFIG_SCOPES = new Set<SimulationConfigScope>(['map', 'project', 'character'])
+const CONFIG_SCOPES = new Set<SimulationConfigScope>(['map', 'project', 'character', 'story', 'skill', 'tool'])
+const PLAYER_MODEL_NAMES = new Map<string, string>(PLAYER_MODELS.map(model => [model.id, model.name]))
+
+const SIMULATION_SKILL_TREE_DEFINITIONS = [
+  { id: 'regulation', name: '法规理解', kind: 'foundation', title: '条款定位 / 判定依据', detail: '识别 GMP 条款语境，建立现场判断的法规依据。', unlockProjectId: 1, toolId: 'risk-matrix' },
+  { id: 'site-audit', name: '现场调查', kind: 'investigation', title: '观察 / 访谈 / 取证', detail: '围绕人、机、料、法、环收集现场证据。', unlockProjectId: 2, toolId: 'fishbone' },
+  { id: 'deviation', name: '偏差分析', kind: 'analysis', title: '偏差分级 / 影响评估', detail: '判断偏差影响面和调查深度，形成可追溯结论。', unlockProjectId: 4, toolId: 'what-if' },
+  { id: 'capa', name: 'CAPA 输出', kind: 'action', title: '纠正预防 / 验证闭环', detail: '把根因、措施、责任人和有效性检查连接成闭环。', unlockProjectId: 6, toolId: 'decision' },
+  { id: 'data-integrity', name: '数据完整性', kind: 'control', title: 'ALCOA+ / 审计追踪', detail: '识别记录缺口、权限风险和数据可追溯性问题。', unlockProjectId: 8, toolId: 'fmea' },
+  { id: 'risk-master', name: '风险统筹', kind: 'mastery', title: '跨场景质量风险管理', detail: '综合工具、证据和角色协作处理高压质量事件。', unlockProjectId: 11, toolId: 'pha' },
+] as const
+
+const SIMULATION_TOOL_DEFINITIONS = [
+  { id: 'risk-matrix', name: '风险矩阵', kind: 'analysis', title: '概率 × 严重度', detail: '用于快速分级质量风险，决定调查优先级。', usage: '剧情调查 / Boss 前判断', unlockProjectId: 1 },
+  { id: 'fishbone', name: '鱼骨图', kind: 'root-cause', title: '人机料法环根因拆解', detail: '适合偏差调查和复杂问题根因归纳。', usage: '工具面板 / 导师建议', unlockProjectId: 2 },
+  { id: 'what-if', name: 'What-if 分析', kind: 'scenario', title: '假设推演', detail: '围绕异常条件推演可能后果和控制点。', usage: '剧情模式 / 风险预判', unlockProjectId: 3 },
+  { id: 'decision', name: '决策树', kind: 'decision', title: '路径判断', detail: '把取样、隔离、复核、放行等动作组织成决策路径。', usage: '剧情模式 / 首要动作', unlockProjectId: 4 },
+  { id: 'fmea', name: 'FMEA', kind: 'failure-mode', title: '失效模式与影响分析', detail: '评估失效模式、影响、原因、现有控制与优先级。', usage: '高阶项目 / CAPA 评估', unlockProjectId: 6 },
+  { id: 'haccp', name: 'HACCP', kind: 'critical-control', title: '关键控制点', detail: '识别关键危害和控制点，适合生产与污染风险场景。', usage: '生产/污染类章节', unlockProjectId: 7 },
+  { id: 'pha', name: 'PHA', kind: 'hazard', title: '过程危害分析', detail: '对复杂工艺和终局项目进行系统化危害识别。', usage: '终局 Boss / 综合复盘', unlockProjectId: 9 },
+] as const
 
 const PROJECT_MAP_BACKGROUNDS: Record<number, string> = {
   1: '/simulation/chapter-scenes/chapter-1/hall.png',
@@ -305,6 +331,15 @@ function trimString(value: unknown, maxLength = 500) {
   const trimmed = value.trim()
   if (!trimmed) return undefined
   return trimmed.slice(0, maxLength)
+}
+
+function resolveUnlockedHeroNames(value: string | null | undefined) {
+  const parsed = parseHeroJson(value)
+  const ids = Array.isArray(parsed)
+    ? parsed.filter((item): item is string => typeof item === 'string' && PLAYER_MODEL_NAMES.has(item))
+    : []
+  const normalizedIds = Array.from(new Set(['knight-hero', ...ids]))
+  return normalizedIds.map(id => PLAYER_MODEL_NAMES.get(id) ?? id)
 }
 
 function optionalNumber(value: unknown) {
@@ -575,6 +610,97 @@ function buildSimulationProjects(
       averageBossAccuracy: scoreAverage(projectRecords.map(item => item.bossAccuracy)),
       creditHours,
       medalCounts: count,
+    }
+  })
+}
+
+function buildSimulationStoryModes(
+  allRecords: Array<ReturnType<typeof toProgressRecord> | ReturnType<typeof toRewardFallbackRecord>>,
+  configs: Map<string, SimulationAdminConfig>,
+) {
+  const recordsByProject = new Map<number, typeof allRecords>()
+  for (const record of allRecords) {
+    const items = recordsByProject.get(record.projectId) ?? []
+    items.push(record)
+    recordsByProject.set(record.projectId, items)
+  }
+
+  return PROJECT_MISSIONS.map(project => {
+    const config = configFor(configs, 'story', project.id)
+    const storyQuestions = buildProjectStoryQuestions(project, 'undergraduate', DEFAULT_CARRIER)
+    const records = recordsByProject.get(project.id) ?? []
+    const assetPath = config?.assetPath || project.storyImage
+    return {
+      id: String(project.id),
+      projectId: project.id,
+      missionCode: project.missionCode,
+      title: config?.displayName || project.title,
+      originalTitle: project.title,
+      status: config?.status || 'active',
+      notes: config?.notes || '',
+      kind: config?.kind || (project.finalBoss ? 'final-boss-story' : 'chapter-story'),
+      lead: config?.lead || project.lead,
+      caseFocus: config?.caseFocus || project.caseFocus,
+      riskSignal: config?.riskSignal || project.riskSignal,
+      firstAction: config?.firstAction || project.firstAction,
+      storyImage: project.storyImage,
+      assetPath,
+      sceneCount: project.scenes.length,
+      npcCount: project.npcs.length,
+      questionCount: storyQuestions.length,
+      passScore: 60,
+      averageStoryScore: scoreAverage(records.map(record => record.storyScore)),
+      completionCount: records.length,
+      configUpdatedAt: config?.updatedAt || null,
+      ...assetInfo(assetPath),
+    }
+  })
+}
+
+function buildSimulationSkillTree(configs: Map<string, SimulationAdminConfig>) {
+  return SIMULATION_SKILL_TREE_DEFINITIONS.map(node => {
+    const config = configFor(configs, 'skill', node.id)
+    const linkedProjectId = Number.isInteger(config?.linkedProjectId) ? config?.linkedProjectId : node.unlockProjectId
+    const project = PROJECT_MISSIONS.find(item => item.id === linkedProjectId)
+    const assetPath = config?.assetPath || ''
+    return {
+      id: node.id,
+      name: config?.displayName || node.name,
+      kind: config?.kind || node.kind,
+      title: config?.caseFocus || node.title,
+      detail: config?.lead || node.detail,
+      status: config?.status || 'active',
+      notes: config?.notes || '',
+      unlockProjectId: linkedProjectId,
+      unlockProjectTitle: project ? `${project.missionCode} · ${project.title}` : '未绑定项目',
+      linkedToolId: node.toolId,
+      configUpdatedAt: config?.updatedAt || null,
+      assetPath,
+      ...assetInfo(assetPath),
+    }
+  })
+}
+
+function buildSimulationTools(configs: Map<string, SimulationAdminConfig>) {
+  return SIMULATION_TOOL_DEFINITIONS.map(tool => {
+    const config = configFor(configs, 'tool', tool.id)
+    const linkedProjectId = Number.isInteger(config?.linkedProjectId) ? config?.linkedProjectId : tool.unlockProjectId
+    const project = PROJECT_MISSIONS.find(item => item.id === linkedProjectId)
+    const assetPath = config?.assetPath || ''
+    return {
+      id: tool.id,
+      name: config?.displayName || tool.name,
+      kind: config?.kind || tool.kind,
+      title: config?.caseFocus || tool.title,
+      detail: config?.lead || tool.detail,
+      usage: config?.firstAction || tool.usage,
+      status: config?.status || 'active',
+      notes: config?.notes || '',
+      unlockProjectId: linkedProjectId,
+      unlockProjectTitle: project ? `${project.missionCode} · ${project.title}` : '未绑定项目',
+      configUpdatedAt: config?.updatedAt || null,
+      assetPath,
+      ...assetInfo(assetPath),
     }
   })
 }
@@ -983,6 +1109,8 @@ async function getSimulationTeams() {
 }
 
 async function getSimulationMembers(allRecords: Array<ReturnType<typeof toProgressRecord> | ReturnType<typeof toRewardFallbackRecord>>) {
+  await ensureSimulationWalletRowsForStudents()
+
   const [rows] = await db.$client.execute<SimulationMemberRow[]>(`
     SELECT
       u.user_id,
@@ -999,7 +1127,12 @@ async function getSimulationMembers(allRecords: Array<ReturnType<typeof toProgre
       gs.rank_title,
       gs.streak_days,
       gs.max_streak,
-      gs.last_login_date
+      gs.last_login_date,
+      gs.simulation_coins,
+      gs.simulation_gems,
+      gs.simulation_trophies,
+      gs.simulation_unlocked_heroes_json,
+      gs.simulation_wallet_synced_at
     FROM users u
     LEFT JOIN user_game_state gs ON gs.user_id = u.user_id
     WHERE u.role = 'student'
@@ -1026,6 +1159,7 @@ async function getSimulationMembers(allRecords: Array<ReturnType<typeof toProgre
       .map(record => record.completedAt)
       .filter(Boolean)
       .sort((left, right) => new Date(right).getTime() - new Date(left).getTime())[0] ?? null
+    const unlockedHeroes = resolveUnlockedHeroNames(row.simulation_unlocked_heroes_json)
 
     return {
       userId: row.user_id,
@@ -1049,13 +1183,13 @@ async function getSimulationMembers(allRecords: Array<ReturnType<typeof toProgre
       averageBestScore: scoreAverage(bestScores),
       medalCounts: counts,
       lastCompletedAt,
-      coins: null,
-      gems: null,
-      trophies: null,
-      unlockedHeroCount: 1,
-      unlockedHeroes: ['骑士英雄'],
-      walletSource: 'client-local-storage',
-      walletSyncStatus: '金币、钻石和英雄解锁目前存于客户端钱包，后台暂不可读取真实余额。',
+      coins: Number(row.simulation_coins) || 0,
+      gems: Number(row.simulation_gems) || 0,
+      trophies: Number(row.simulation_trophies) || 0,
+      unlockedHeroCount: unlockedHeroes.length,
+      unlockedHeroes,
+      walletSource: 'server-database-wallet',
+      walletSyncStatus: '',
       createdAt: row.created_at,
     }
   })
@@ -1090,6 +1224,9 @@ export async function GET(req: NextRequest) {
   const configs = await loadSimulationAdminConfigs()
   const maps = buildSimulationMaps(configs)
   const projects = buildSimulationProjects(allRecords, configs)
+  const stories = buildSimulationStoryModes(allRecords, configs)
+  const skills = buildSimulationSkillTree(configs)
+  const tools = buildSimulationTools(configs)
   const characters = buildSimulationCharacters(configs)
   const teams = await getSimulationTeams()
   const members = await getSimulationMembers(allRecords)
@@ -1120,6 +1257,9 @@ export async function GET(req: NextRequest) {
       questionCount: projects.reduce((sum, item) => sum + item.questionCount, 0),
       mapCount: maps.length,
       characterCount: characters.length,
+      storyModeCount: stories.length,
+      skillNodeCount: skills.length,
+      toolCount: tools.length,
       activeTeamCount: teams.length,
       memberCount: members.length,
       configuredEntityCount,
@@ -1156,15 +1296,21 @@ export async function GET(req: NextRequest) {
         { key: 'members', title: '成员管理', desc: '查看成员等级、积分、通关、课时分和客户端钱包同步状态。', count: members.length },
         { key: 'maps', title: '地图管理', desc: '管理章节地图、悬赏地图和自定义地图资源路径。', count: maps.length },
         { key: 'projects', title: '项目管理', desc: '配置 11 个章节项目的内容、风险信号和 Boss 信息。', count: projects.length },
+        { key: 'story', title: '剧情模式', desc: '配置章节剧情入口、剧情导语、风险信号和剧情题数量。', count: stories.length },
+        { key: 'skills', title: '技能树', desc: '配置法规理解、现场调查、偏差分析等能力节点。', count: skills.length },
+        { key: 'tools', title: '工具管理', desc: '配置风险矩阵、鱼骨图、FMEA 等实训工具。', count: tools.length },
         { key: 'characters', title: '人物管理', desc: '管理英雄、小怪、精英怪与 Boss 的真实战斗模型和数值。', count: characters.length },
         { key: 'teams', title: '组队管理', desc: '查看当前开放或进行中的队伍、成员、角色和项目。', count: teams.length },
         { key: 'records', title: '通关记录', desc: '查询、导出或重置学生项目通关进度。', count: filteredRecords.length },
       ],
-      walletSyncNote: '金币、钻石、奖杯和英雄解锁目前由前台 localStorage 钱包保存；后台展示服务器侧积分/等级，并保留钱包同步提示。',
+      walletSyncNote: '',
       assetManageNote: '地图和人物的更换/新增通过后台资源路径配置完成，不会物理删除 public/simulation 下的素材文件。',
     },
     maps,
     projects,
+    stories,
+    skills,
+    tools,
     characters,
     teams,
     members,

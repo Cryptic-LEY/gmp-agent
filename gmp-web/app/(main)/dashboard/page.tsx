@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { BookOpen, BookOpenCheck, Coins, Gem, HeartPulse, Trophy, List, Network, Wrench, Award, CheckCircle, Play, ArrowRight, X, ClipboardList, RotateCcw, ChevronDown, ChevronUp, Clock, Flame, Star, ShieldCheck, GraduationCap, Medal, Target } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
@@ -18,7 +18,7 @@ import {
 const GraphPanel = dynamic(() => import('./GraphPanel'), { ssr: false })
 
 interface GameState { xp: number; points: number; rankLevel: number; rankTitle: string; rankProgress: number; xpToNext: number; streakDays: number; maxStreak: number }
-interface SimulationAssets { coins: number; gems: number; trophies: number; hp: number; creditHours: number; hasProgress: boolean }
+interface SimulationAssets { coins: number; gems: number; trophies: number; hp: number; creditHours: number; hasProgress: boolean; hasWallet: boolean; unlockedHeroIds?: string[] }
 interface SimulationProgressEntry { medal?: ProjectMedal; creditHours?: number }
 interface DashboardCourseSummary {
   totalChapters: number
@@ -32,7 +32,7 @@ interface DashboardCourseSummary {
 const SIMULATION_WALLET_KEY = 'gmp-simulation-wallet-v2'
 const SIMULATION_PROGRESS_KEY = 'gmp-simulation-project-progress-v1'
 const SIMULATION_HP_KEY = 'gmp-simulation-hp-v2'
-const DEFAULT_SIMULATION_ASSETS: SimulationAssets = { coins: 0, gems: 0, trophies: 0, hp: 100, creditHours: 0, hasProgress: false }
+const DEFAULT_SIMULATION_ASSETS: SimulationAssets = { coins: 0, gems: 0, trophies: 0, hp: 100, creditHours: 0, hasProgress: false, hasWallet: false }
 const SIMULATION_CREDIT_TARGET =
   COURSE_CREDIT_RULES.gameProjectRegular + FINAL_BOSS_BASE_CREDIT + MEDAL_BONUS_CREDIT_TOTAL
 const TOTAL_CREDIT_TARGET =
@@ -230,11 +230,16 @@ function readSimulationAssets(userId?: string | null) {
   if (storedWallet) {
     try {
       const wallet = JSON.parse(storedWallet) as Partial<SimulationAssets>
+      const walletInventory = wallet as Partial<SimulationAssets> & { inventory?: { playerModels?: unknown } }
       assets = {
         ...assets,
+        hasWallet: true,
         coins: wallet.coins ?? assets.coins,
         gems: wallet.gems ?? assets.gems,
         trophies: wallet.trophies ?? assets.trophies,
+        unlockedHeroIds: Array.isArray(walletInventory.inventory?.playerModels)
+          ? walletInventory.inventory.playerModels.filter((item): item is string => typeof item === 'string')
+          : assets.unlockedHeroIds,
       }
     } catch {
       localStorage.removeItem(walletKey)
@@ -257,6 +262,56 @@ function readSimulationAssets(userId?: string | null) {
     assets.hasProgress = true
   }
   return assets
+}
+
+async function syncSimulationAssetsToServer(assets: SimulationAssets, token: string, lastSyncRef: { current: string }) {
+  if (!assets.hasWallet) return
+
+  let payload = {
+    coins: assets.coins,
+    gems: assets.gems,
+    trophies: assets.trophies,
+    unlockedHeroIds: assets.unlockedHeroIds,
+  }
+
+  try {
+    const serverResponse = await fetch('/api/game/wallet', {
+      headers: { Authorization: `Bearer ${token}` },
+      cache: 'no-store',
+    })
+    const serverData = serverResponse.ok
+      ? await serverResponse.json().catch(() => null) as { wallet?: { coins?: number; gems?: number; trophies?: number; unlockedHeroIds?: unknown } } | null
+      : null
+    if (serverData?.wallet) {
+      const serverHeroIds = Array.isArray(serverData.wallet.unlockedHeroIds)
+        ? serverData.wallet.unlockedHeroIds.filter((item): item is string => typeof item === 'string')
+        : []
+      payload = {
+        coins: Math.max(payload.coins, Number(serverData.wallet.coins) || 0),
+        gems: Math.max(payload.gems, Number(serverData.wallet.gems) || 0),
+        trophies: Math.max(payload.trophies, Number(serverData.wallet.trophies) || 0),
+        unlockedHeroIds: Array.from(new Set([...(payload.unlockedHeroIds ?? []), ...serverHeroIds])),
+      }
+    }
+
+    const payloadKey = JSON.stringify(payload)
+    if (lastSyncRef.current === payloadKey) return
+
+    const response = await fetch('/api/game/wallet', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify(payload),
+      keepalive: true,
+    })
+    if (response.ok) {
+      lastSyncRef.current = payloadKey
+    }
+  } catch {
+    // Dashboard refresh/focus will retry later.
+  }
 }
 
 // ── Study dialog helpers ─────────────────────────────────────────────────────
@@ -332,6 +387,7 @@ function buildStudyRoute(level: string, education: string, major: string): Study
 
 export default function DashboardPage() {
   const router = useRouter()
+  const lastWalletSyncRef = useRef('')
   const [gs, setGs]                   = useState<GameState | null>(null)
   const [assets, setAssets]           = useState<SimulationAssets>(DEFAULT_SIMULATION_ASSETS)
   const [assetsReady, setAssetsReady] = useState(false)
@@ -365,7 +421,11 @@ export default function DashboardPage() {
     if (!t) { router.push('/login'); return }
     setToken(t)
     const currentUserId = localStorage.getItem('userId')
-    const syncAssets = () => setAssets(readSimulationAssets(currentUserId))
+    const syncAssets = () => {
+      const nextAssets = readSimulationAssets(currentUserId)
+      setAssets(nextAssets)
+      void syncSimulationAssetsToServer(nextAssets, t, lastWalletSyncRef)
+    }
     syncAssets()
     setAssetsReady(true)
     window.addEventListener('focus', syncAssets)

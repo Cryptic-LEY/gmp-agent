@@ -2809,9 +2809,8 @@ export default function AdminPage() {
                                 <span><strong className="text-slate-800">学校班级：</strong>{member.school} · {member.className} · {member.major}</span>
                                 <span><strong className="text-slate-800">实训进度：</strong>已通关 {member.completedProjectCount} / 解锁 {member.unlockedProjectCount}</span>
                                 <span><strong className="text-slate-800">英雄：</strong>{member.unlockedHeroes.join('、')} <em className="not-italic text-slate-400">({member.unlockedHeroCount})</em></span>
-                                <span><strong className="text-slate-800">金币/钻石：</strong>{member.coins ?? '客户端钱包'} / {member.gems ?? '客户端钱包'}</span>
+                                <span><strong className="text-slate-800">金币/钻石/奖杯：</strong>{member.coins ?? 0} / {member.gems ?? 0} / {member.trophies ?? 0}</span>
                               </div>
-                              <p className="m-0 text-xs leading-5 text-amber-700">{member.walletSyncStatus}</p>
                               <div className="flex flex-wrap items-center justify-between gap-2 border-t border-slate-100 pt-3">
                                 <div className="flex flex-wrap gap-1.5">
                                   <Pill tone="orange">金 {member.medalCounts.gold}</Pill>

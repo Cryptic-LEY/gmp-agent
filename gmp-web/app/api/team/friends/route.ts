@@ -16,6 +16,10 @@ interface FriendRow extends TeamUserRow {
   status: string
   requester_id: string
   created_at: string
+  activity_status: string | null
+  activity_project_id: number | null
+  activity_room_id: string | null
+  activity_updated_at: string | null
 }
 
 interface FriendRoomRow {
@@ -44,10 +48,12 @@ export async function GET(req: NextRequest) {
 
   const friendRows = await db.raw.all<FriendRow>(
     `SELECT f.id AS friendship_id, f.status, f.requester_id, f.created_at,
-            u.user_id, u.display_name, u.real_name, u.school, u.class_name, u.major, u.avatar_url
+            u.user_id, u.display_name, u.real_name, u.school, u.class_name, u.major, u.avatar_url,
+            p.activity_status, p.activity_project_id, p.activity_room_id, p.activity_updated_at
      FROM team_friendships f
      INNER JOIN users u
        ON u.user_id = CASE WHEN f.user_a_id = ? THEN f.user_b_id ELSE f.user_a_id END
+     LEFT JOIN team_presence p ON p.user_id = u.user_id
      WHERE (f.user_a_id = ? OR f.user_b_id = ?) AND f.status = 'accepted'
      ORDER BY f.updated_at DESC
      LIMIT 80`,
@@ -56,10 +62,12 @@ export async function GET(req: NextRequest) {
 
   const requestRows = await db.raw.all<FriendRow>(
     `SELECT f.id AS friendship_id, f.status, f.requester_id, f.created_at,
-            u.user_id, u.display_name, u.real_name, u.school, u.class_name, u.major, u.avatar_url
+            u.user_id, u.display_name, u.real_name, u.school, u.class_name, u.major, u.avatar_url,
+            p.activity_status, p.activity_project_id, p.activity_room_id, p.activity_updated_at
      FROM team_friendships f
      INNER JOIN users u
        ON u.user_id = CASE WHEN f.user_a_id = ? THEN f.user_b_id ELSE f.user_a_id END
+     LEFT JOIN team_presence p ON p.user_id = u.user_id
      WHERE (f.user_a_id = ? OR f.user_b_id = ?) AND f.status = 'pending'
      ORDER BY f.updated_at DESC
      LIMIT 80`,
@@ -86,12 +94,13 @@ export async function GET(req: NextRequest) {
     if (!activeRoomByFriendId.has(room.user_id)) activeRoomByFriendId.set(room.user_id, room)
   }
 
-  const friends = friendRows.map(row => ({
-    ...normalizeTeamUser(row),
-    friendshipId: Number(row.friendship_id),
-    status: row.status,
-    online: onlineUserIds.has(row.user_id),
-    activeRoom: (() => {
+  const friends = friendRows.map(row => {
+    const online = onlineUserIds.has(row.user_id)
+    const activityFresh = row.activity_updated_at
+      ? Date.now() - Date.parse(row.activity_updated_at) < 90_000
+      : false
+    const activityStatus = online && activityFresh ? row.activity_status : null
+    const activeRoom = (() => {
       const room = activeRoomByFriendId.get(row.user_id)
       if (!room) return null
       const project = getProjectDefinition(Number(room.project_id))
@@ -107,8 +116,21 @@ export async function GET(req: NextRequest) {
         joinable: room.status === 'open' && Number(room.member_total ?? 0) < 3,
         mineInRoom: Boolean(room.mine_in_room),
       }
-    })(),
-  }))
+    })()
+    return {
+      ...normalizeTeamUser(row),
+      friendshipId: Number(row.friendship_id),
+      status: row.status,
+      online,
+      activeRoom,
+      activity: activityStatus && activityStatus !== 'idle' ? {
+        status: activityStatus,
+        projectId: row.activity_project_id ? Number(row.activity_project_id) : null,
+        roomId: row.activity_room_id,
+      } : null,
+      busy: Boolean((activeRoom && !activeRoom.mineInRoom) || activityStatus === 'solo'),
+    }
+  })
 
   const requests = requestRows.map(row => ({
     ...normalizeTeamUser(row),

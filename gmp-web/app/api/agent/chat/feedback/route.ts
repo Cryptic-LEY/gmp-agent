@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/db'
 import { verifyToken } from '@/lib/auth'
 
+const AGENT_API_URL = (process.env.AGENT_API_URL ?? process.env.GMP_API_URL ?? 'http://127.0.0.1:8001').replace(/\/+$/, '')
+
 interface MessageRow {
   id: number
   session_id: string
@@ -48,6 +50,7 @@ export async function POST(req: NextRequest) {
   let messageId: number | null = null
   let messageRole = asTrimmedString(body.messageRole) || 'assistant'
   let messageContent = asTrimmedString(body.messageContent)
+  let question = limitText(asTrimmedString(body.question), 8000)
 
   if (requestedMessageId) {
     const message = (await db.raw.all<MessageRow>(
@@ -68,6 +71,16 @@ export async function POST(req: NextRequest) {
     messageId = Number(message.id)
     messageRole = message.role
     if (!messageContent) messageContent = message.content
+
+    const previousUserMessage = (await db.raw.all<{ content: string }>(
+      `SELECT content
+       FROM ai_chat_messages
+       WHERE session_id = ? AND role = 'user' AND id < ?
+       ORDER BY id DESC
+       LIMIT 1`,
+      [sessionId, messageId],
+    ))[0]
+    if (!question) question = limitText(previousUserMessage?.content ?? '', 8000)
   } else if (requestedSessionId) {
     const session = (await db.raw.all<SessionRow>(
       `SELECT session_id
@@ -79,6 +92,16 @@ export async function POST(req: NextRequest) {
 
     if (!session) return NextResponse.json({ error: 'Session not found' }, { status: 404 })
     sessionId = session.session_id
+
+    const latestUserMessage = (await db.raw.all<{ content: string }>(
+      `SELECT content
+       FROM ai_chat_messages
+       WHERE session_id = ? AND role = 'user'
+       ORDER BY id DESC
+       LIMIT 1`,
+      [sessionId],
+    ))[0]
+    if (!question) question = limitText(latestUserMessage?.content ?? '', 8000)
   }
 
   if (messageRole !== 'assistant') {
@@ -96,5 +119,28 @@ export async function POST(req: NextRequest) {
     [payload.userId, sessionId, messageId, messageRole, messageContent, userComment],
   ) as { insertId?: number | string }
 
-  return NextResponse.json({ ok: true, id: Number(result.insertId ?? 0) })
+  let errorBookId: number | null = null
+  if (question) {
+    try {
+      const resp = await fetch(`${AGENT_API_URL}/chat/feedback`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          question,
+          bad_answer: messageContent,
+          reason: userComment || '用户点击答案有误',
+          fix_hint: '',
+        }),
+        signal: AbortSignal.timeout(5000),
+      })
+      if (resp.ok) {
+        const data = await resp.json().catch(() => ({})) as { error_id?: number }
+        errorBookId = typeof data.error_id === 'number' ? data.error_id : null
+      }
+    } catch {
+      // 本地反馈日志已记录；后端评测闭环不可用时不影响用户提交。
+    }
+  }
+
+  return NextResponse.json({ ok: true, id: Number(result.insertId ?? 0), errorBookId })
 }

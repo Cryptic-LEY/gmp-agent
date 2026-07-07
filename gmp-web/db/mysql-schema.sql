@@ -147,6 +147,11 @@ CREATE TABLE IF NOT EXISTS user_game_state (
   max_streak INT NOT NULL DEFAULT 0,
   punish_until DATETIME(3),
   last_login_date DATE,
+  simulation_coins INT NOT NULL DEFAULT 0,
+  simulation_gems INT NOT NULL DEFAULT 0,
+  simulation_trophies INT NOT NULL DEFAULT 0,
+  simulation_unlocked_heroes_json LONGTEXT,
+  simulation_wallet_synced_at DATETIME(3),
   PRIMARY KEY (user_id),
   CONSTRAINT fk_user_game_state_user FOREIGN KEY (user_id) REFERENCES users(user_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
@@ -181,6 +186,16 @@ CREATE TABLE IF NOT EXISTS simulation_project_progress (
   PRIMARY KEY (user_id, project_id),
   KEY idx_simulation_project_progress_user_completed (user_id, completed_at),
   CONSTRAINT fk_simulation_project_progress_user FOREIGN KEY (user_id) REFERENCES users(user_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS simulation_story_round_progress (
+  user_id VARCHAR(191) NOT NULL,
+  project_id INT NOT NULL,
+  round_id VARCHAR(191) NOT NULL,
+  watched_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  PRIMARY KEY (user_id, project_id, round_id),
+  KEY idx_simulation_story_round_progress_user_project (user_id, project_id, watched_at),
+  CONSTRAINT fk_simulation_story_round_progress_user FOREIGN KEY (user_id) REFERENCES users(user_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS reg_library (

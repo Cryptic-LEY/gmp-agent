@@ -36,6 +36,7 @@ export async function POST(req: NextRequest) {
   const teacherMode = body.audience === 'teacher' || payload.role === 'teacher' || payload.role === 'admin'
   const upstreamBody = {
     ...body,
+    user_id: payload.userId,
     audience: teacherMode ? 'teacher' : body.audience,
   }
 

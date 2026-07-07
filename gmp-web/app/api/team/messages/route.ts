@@ -34,6 +34,7 @@ export async function GET(req: NextRequest) {
        FROM team_private_messages m
        INNER JOIN users u ON u.user_id = m.sender_id
        WHERE m.receiver_id = ?
+        AND m.read_at IS NULL
        ORDER BY m.created_at DESC
        LIMIT 20`,
       [payload.userId],
@@ -59,6 +60,15 @@ export async function GET(req: NextRequest) {
      ORDER BY created_at ASC
      LIMIT 100`,
     [payload.userId, peerId, peerId, payload.userId],
+  )
+
+  await db.raw.run(
+    `UPDATE team_private_messages
+     SET read_at = COALESCE(read_at, CURRENT_TIMESTAMP(3))
+     WHERE sender_id = ?
+       AND receiver_id = ?
+       AND read_at IS NULL`,
+    [peerId, payload.userId],
   )
 
   return NextResponse.json({
