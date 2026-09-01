@@ -26,7 +26,7 @@ from config import (
     COVE_ENABLED,
 )
 from logger import log_query
-from rag.retriever import retrieve, DocChunk
+from rag.retriever import capture_retrieval_timings, retrieve, DocChunk
 from rag.compressor import compress_chunk, reorder_for_llm
 from agents.router import route_model
 
@@ -140,7 +140,9 @@ class TutorState(TypedDict):
     edu_level: str | None              # 学生学历层次
     retrieved_docs: list[dict]         # 检索到的上下文片段
     draft_answer: str                  # Generator生成的初稿
+    gen_contexts: list[str]            # 生成时模型真正看到的上下文（压缩+重排后），供评测 FF 对齐
     critic_issues: str                 # Critic发现的问题（空字符串=无问题）
+    critic_ever: bool                  # 复核是否曾触发过（保持 critic_triggered 原语义：曾发现问题/发生修订）
     final_answer: str                  # 最终答案
     query_vec: list[float] | None      # 预计算 embedding（缓存复用 / 避免重嵌入）
     step: int                          # 已执行的 revise 步骤数（limits.early_stop 使用）
@@ -148,6 +150,70 @@ class TutorState(TypedDict):
     profile_hint: str                  # 档案卡一行注入（空字符串=无画像）
     summary: str                       # 近期对话摘要（空字符串=未触发）
     current_state: dict                # 结构化工作记忆（话题/已问/待确认）
+    timings_ms: dict[str, int]         # 单次请求的阶段耗时；循环节点按阶段累计
+    stage_counts: dict[str, int]       # LangGraph 节点调用次数；用于解释循环放大
+
+
+_TIMING_STAGES = (
+    "memory",
+    "embedding",
+    "cache_lookup",
+    "retrieve",
+    "generate",
+    "critique",
+    "revise",
+)
+
+
+def _new_timings() -> dict[str, int]:
+    """为每次请求创建独立字典，未发生的阶段保持为 0。"""
+    return {stage: 0 for stage in _TIMING_STAGES}
+
+
+def _new_stage_counts() -> dict[str, int]:
+    return {
+        "retrieve_calls": 0,
+        "generate_calls": 0,
+        "critique_calls": 0,
+        "revise_calls": 0,
+    }
+
+
+def _increment_stage_count(
+    counts: dict[str, int] | None,
+    stage: str,
+) -> dict[str, int]:
+    updated = _new_stage_counts()
+    updated.update(counts or {})
+    key = f"{stage}_calls"
+    updated[key] = updated.get(key, 0) + 1
+    return updated
+
+
+def _record_timing(
+    timings: dict[str, int] | None,
+    stage: str,
+    started_at: float,
+) -> dict[str, int]:
+    """复制并累计阶段耗时，避免不同 LangGraph 节点覆盖彼此的观测数据。"""
+    updated = dict(timings or {})
+    elapsed_ms = max(0, int((time.monotonic() - started_at) * 1000))
+    updated[stage] = updated.get(stage, 0) + elapsed_ms
+    return updated
+
+
+def _finalize_timings(
+    timings: dict[str, int] | None,
+    request_started_at: float,
+) -> dict[str, int]:
+    """补齐稳定字段，并记录从 ask_tutor 入口开始的总耗时。"""
+    completed = _new_timings()
+    completed.update(timings or {})
+    completed["total"] = max(
+        0,
+        int((time.monotonic() - request_started_at) * 1000),
+    )
+    return completed
 
 
 # ── 上下文格式化 ───────────────────────────────────────────────────────────────
@@ -223,18 +289,29 @@ def _format_context(docs: list[DocChunk]) -> str:
 
 # ── 节点函数 ──────────────────────────────────────────────────────────────────
 def node_retrieve(state: TutorState) -> dict:
+    started_at = time.monotonic()
     question = state["messages"][-1].content
-    docs = retrieve(question, edu_level=state.get("edu_level"),
-                   query_vec=state.get("query_vec"))
+    with capture_retrieval_timings() as retrieval_timings:
+        docs = retrieve(question, edu_level=state.get("edu_level"),
+                        query_vec=state.get("query_vec"))
+    timings_ms = dict(state.get("timings_ms") or {})
+    timings_ms.update(retrieval_timings)
     # score 必须序列化，node_generate 的 reorder_for_llm 依赖它（B4）
-    return {"retrieved_docs": [
-        {"id": d.id, "doc_type": d.doc_type, "title": d.title,
-         "content": d.content, "score": d.score}
-        for d in docs
-    ]}
+    return {
+        "retrieved_docs": [
+            {"id": d.id, "doc_type": d.doc_type, "title": d.title,
+             "content": d.content, "score": d.score}
+            for d in docs
+        ],
+        "timings_ms": _record_timing(timings_ms, "retrieve", started_at),
+        "stage_counts": _increment_stage_count(
+            state.get("stage_counts"), "retrieve",
+        ),
+    }
 
 
 def node_generate(state: TutorState) -> dict:
+    started_at = time.monotonic()
     question = state["messages"][-1].content
     # 压缩 + 头尾重组（B3/B4）；score 由 node_retrieve 序列化传入，reorder 依赖它
     raw_docs = [DocChunk(
@@ -289,7 +366,15 @@ def node_generate(state: TutorState) -> dict:
     llm_messages = llm_messages[:-1] + history_msgs + [final_user]
 
     draft = _llm_chat(llm_messages, model=route_model("generate"))
-    return {"draft_answer": draft}
+    # 点2：导出模型真正看到的证据（压缩+重排后的分块内容），供评测 FF 严格对齐
+    return {
+        "draft_answer": draft,
+        "gen_contexts": [d.content for d in ordered_docs],
+        "timings_ms": _record_timing(state.get("timings_ms"), "generate", started_at),
+        "stage_counts": _increment_stage_count(
+            state.get("stage_counts"), "generate",
+        ),
+    }
 
 
 def _check_hallucinated_articles(draft: str, retrieved_ids: set[str]) -> str:
@@ -340,47 +425,66 @@ def _cove_verify(draft: str, context: str, llm_fn=None) -> str:
     return "" if result.strip().lower().startswith("verified") else result.strip()
 
 
-def node_critique(state: TutorState) -> dict:
-    """Critic节点：LLM内容校验 + 确定性条款编号幻觉检测（P1-5）+ CoVe验证链（D5）。"""
-    reg_docs = [d for d in state["retrieved_docs"] if d["doc_type"] == "regulation"]
+# 预算用尽仍有未解决问题时，附在答案末尾的如实降级提示（绝不静默输出"看似正常"的答案）
+_DEGRADE_NOTICE = (
+    "\n\n⚠️ 说明：本回答经多轮自检仍存在未能完全消解的问题，"
+    "请谨慎参考，并以现行 GMP 法规原文为准。"
+)
 
-    # P1-5: 确定性校验——先检查条款编号是否真实存在
-    retrieved_ids = {d["id"] for d in state["retrieved_docs"]}
-    hallucination_issue = _check_hallucinated_articles(state["draft_answer"], retrieved_ids)
-    if hallucination_issue:
-        return {"critic_issues": hallucination_issue}
 
-    if not reg_docs:
-        return {"critic_issues": ""}
-
-    # LLM内容校验
-    reg_context = '\n'.join(f"【{d['id']}】{d['content']}" for d in reg_docs[:5])
+def _critique_answer(draft: str, reg_context: str, retrieved_ids: set[str]) -> str:
+    """核查答案，返回 critic_issues（空=通过）。**图与流式两条路径共用，保证复核逻辑对称。**
+    - 确定性条款幻觉检测（引用了未检索到的条款 → 直接判问题，零成本、不调 LLM）
+    - LLM 法规校验（有法规上下文时）
+    - CoVe 声明级核查（COVE_ENABLED 且前两步通过时）
+    """
+    hall = _check_hallucinated_articles(draft, retrieved_ids)
+    if hall:
+        return hall
+    if not reg_context:
+        return ""
     prompt = f"""你是GMP法规审核专家。请核查以下答案是否与给出的法规条文存在矛盾或错误。
 
 法规原文：
 {reg_context}
 
 待审核答案：
-{state['draft_answer']}
+{draft}
 
 如果答案与法规一致，请只回复：PASS
 如果发现错误，请指出具体问题（一句话）。"""
-
-    messages = [{"role": "user", "content": prompt}]
-    result = _llm_chat(messages, temperature=0.1, model=route_model("critique"))
+    result = _llm_chat([{"role": "user", "content": prompt}],
+                       temperature=0.1, model=route_model("critique"))
     issues = "" if result.strip().upper().startswith("PASS") else result.strip()
-
-    # D5: CoVe 验证链（critic 通过后再做一次声明级核查；受 COVE_ENABLED 控制）
     if COVE_ENABLED and not issues:
-        cove_issues = _cove_verify(state["draft_answer"], reg_context)
+        cove_issues = _cove_verify(draft, reg_context)
         if cove_issues:
             issues = f"[CoVe] {cove_issues}"
+    return issues
 
-    return {"critic_issues": issues}
+
+def node_critique(state: TutorState) -> dict:
+    """Critic节点：确定性条款幻觉检测 + LLM内容校验 + CoVe验证链（复用 _critique_answer）。"""
+    started_at = time.monotonic()
+    reg_docs = [d for d in state["retrieved_docs"] if d["doc_type"] == "regulation"]
+    retrieved_ids = {d["id"] for d in state["retrieved_docs"]}
+    reg_context = '\n'.join(f"【{d['id']}】{d['content']}" for d in reg_docs[:5])
+    issues = _critique_answer(state["draft_answer"], reg_context, retrieved_ids)
+    out: dict = {"critic_issues": issues}
+    if issues:
+        out["critic_ever"] = True   # 只置 True、不复位：保证多轮复核后仍反映"曾触发"
+    out["timings_ms"] = _record_timing(
+        state.get("timings_ms"), "critique", started_at,
+    )
+    out["stage_counts"] = _increment_stage_count(
+        state.get("stage_counts"), "critique",
+    )
+    return out
 
 
 def node_revise(state: TutorState) -> dict:
     """修订节点：根据Critic意见修正答案。"""
+    started_at = time.monotonic()
     prompt = f"""原答案存在以下问题：{state['critic_issues']}
 
 请修正原答案，确保符合GMP法规要求：
@@ -390,11 +494,23 @@ def node_revise(state: TutorState) -> dict:
 
     messages = [{"role": "user", "content": prompt}]
     revised = _llm_chat(messages, model=route_model("revise"))
-    return {"final_answer": revised, "step": state.get("step", 0) + 1}
+    # 写回 draft_answer（而非直接 final_answer）→ 让修订稿回到 critique 重新复核；step+1 供预算兜底
+    return {
+        "draft_answer": revised,
+        "step": state.get("step", 0) + 1,
+        "timings_ms": _record_timing(state.get("timings_ms"), "revise", started_at),
+        "stage_counts": _increment_stage_count(
+            state.get("stage_counts"), "revise",
+        ),
+    }
 
 
 def node_respond(state: TutorState) -> dict:
-    return {"final_answer": state["draft_answer"]}
+    """定稿：无问题原样输出；预算用尽仍有未解决问题 → 如实降级，不静默输出。"""
+    draft = state["draft_answer"]
+    if state.get("critic_issues"):
+        return {"final_answer": draft + _DEGRADE_NOTICE}
+    return {"final_answer": draft}
 
 
 def _should_revise(state: TutorState) -> str:
@@ -417,7 +533,7 @@ def build_tutor_graph():
     g.add_edge("retrieve", "generate")
     g.add_edge("generate", "critique")
     g.add_conditional_edges("critique", _should_revise, {"revise": "revise", "respond": "respond"})
-    g.add_edge("revise",  END)
+    g.add_edge("revise",  "critique")   # 修订稿必须回到 critique 重新复核（不再跳过校验直接结束）
     g.add_edge("respond", END)
 
     return g.compile()
@@ -442,7 +558,12 @@ def ask_tutor(
     Returns:
       {"answer": str, "sources": list[str], "critic_triggered": bool}
     """
+    request_started_at = time.monotonic()
+    timings_ms = _new_timings()
+    stage_counts = _new_stage_counts()
+
     # ── 四层记忆：用户档案卡 + 语义级历史过滤 + 摘要（持久化） + current_state ──
+    memory_started_at = time.monotonic()
     profile_hint = ""
     summary = ""
     current_state: dict = {}
@@ -464,6 +585,8 @@ def ask_tutor(
         except Exception:
             pass  # 记忆不可用时静默降级
 
+    timings_ms = _record_timing(timings_ms, "memory", memory_started_at)
+
     # 把前端传来的历史转成 LangChain Message 对象，只取最近 HISTORY_TURNS 轮
     history_messages: list[BaseMessage] = []
     for msg in filtered_history[-HISTORY_TURNS * 2:]:
@@ -473,6 +596,7 @@ def ask_tutor(
             history_messages.append(AIMessage(content=msg["content"]))
 
     # 预计算 embedding（用于缓存命中检测，失败则降级）
+    embedding_started_at = time.monotonic()
     query_vec: list[float] | None = None
     if SEMANTIC_CACHE_ENABLED:
         from rag.retriever import embed_query
@@ -480,20 +604,29 @@ def ask_tutor(
             query_vec = embed_query(question)
         except Exception:
             pass
+    timings_ms = _record_timing(timings_ms, "embedding", embedding_started_at)
 
     # 语义缓存前置检查（B5）
     if SEMANTIC_CACHE_ENABLED and query_vec:
+        cache_lookup_started_at = time.monotonic()
         from cache.semantic_cache import get_cache
         cached = get_cache().get(query_vec, edu_level, user_id)
+        timings_ms = _record_timing(timings_ms, "cache_lookup", cache_lookup_started_at)
         if cached:
-            return cached
+            return {
+                **cached,
+                "timings_ms": _finalize_timings(timings_ms, request_started_at),
+                "stage_counts": stage_counts,
+            }
 
     initial_state: TutorState = {
         "messages": history_messages + [HumanMessage(content=question)],
         "edu_level": edu_level,
         "retrieved_docs": [],
         "draft_answer": "",
+        "gen_contexts": [],
         "critic_issues": "",
+        "critic_ever": False,
         "final_answer": "",
         "query_vec": query_vec,
         "step": 0,
@@ -501,13 +634,17 @@ def ask_tutor(
         "profile_hint": profile_hint,
         "summary": summary,
         "current_state": current_state,
+        "timings_ms": timings_ms,
+        "stage_counts": stage_counts,
     }
     t0 = time.monotonic()
     result = tutor_graph.invoke(initial_state)
     latency_ms = int((time.monotonic() - t0) * 1000)
 
     sources = [d["id"] for d in result["retrieved_docs"]]
-    critic_triggered = bool(result.get("critic_issues"))
+    # 保持原语义：critic_triggered = 复核是否曾触发（曾发现问题/发生修订），
+    # 而非"最终是否仍有问题"（后者由降级提示体现）。与流式路径口径一致。
+    critic_triggered = bool(result.get("critic_ever"))
     answer_result = {
         "answer": result["final_answer"],
         "sources": sources,
@@ -570,8 +707,14 @@ def ask_tutor(
 
     # 返回本次实际检索到的文档内容，供评估复用（避免二次 retrieve 造成证据错位）。
     # 不放进 answer_result（已缓存）以免膨胀语义缓存；仅附加到返回值。
+    # 点2：同时带出 gen_contexts（生成时模型真正看到的压缩+重排上下文），供评测 FF 对齐。
     return {**answer_result,
-            "contexts": [d["content"] for d in result["retrieved_docs"]]}
+            "contexts": [d["content"] for d in result["retrieved_docs"]],
+            "gen_contexts": result.get("gen_contexts", []),
+            "stage_counts": result.get("stage_counts", stage_counts),
+            "timings_ms": _finalize_timings(
+                result.get("timings_ms"), request_started_at,
+            )}
 
 
 # ── 流式问答入口（P2-3） ────────────────────────────────────────────────────────
@@ -671,62 +814,34 @@ def ask_tutor_stream(
     except Exception:
         draft = _llm_chat(gen_messages)  # 降级到同步
 
-    # 3. 确定性幻觉检测
+    # 3+4. 复核（幻觉检测 + LLM法规校验 + CoVe）——与非流式共用 _critique_answer，逻辑对称
     retrieved_ids = {d.id for d in docs}
-    critic_issues = _check_hallucinated_articles(draft, retrieved_ids)
-
-    # 4. LLM内容校验（有法规条文时）
-    if not critic_issues:
-        reg_docs = [d for d in docs if d.doc_type == "regulation"]
-        if reg_docs:
-            reg_context = "\n".join(f"【{d.id}】{d.content}" for d in reg_docs[:5])
-            critique_prompt = (
-                f"你是GMP法规审核专家。请核查以下答案是否与给出的法规条文存在矛盾或错误。\n\n"
-                f"法规原文：\n{reg_context}\n\n待审核答案：\n{draft}\n\n"
-                f"如果答案与法规一致，请只回复：PASS\n如果发现错误，请指出具体问题（一句话）。"
-            )
-            result = _llm_chat(
-                [{"role": "user", "content": critique_prompt}],
-                temperature=0.1, model=route_model("critique"),
-            )
-            if not result.strip().upper().startswith("PASS"):
-                critic_issues = result.strip()
-            elif COVE_ENABLED:
-                # 4b. CoVe 验证链（与非流式路径对称）
-                cove_issues = _cove_verify(draft, reg_context)
-                if cove_issues:
-                    critic_issues = f"[CoVe] {cove_issues}"
-
+    reg_docs = [d for d in docs if d.doc_type == "regulation"]
+    reg_context = "\n".join(f"【{d.id}】{d.content}" for d in reg_docs[:5])
+    critic_issues = _critique_answer(draft, reg_context, retrieved_ids)
     critic_triggered = bool(critic_issues)
 
-    # 5. 流式输出最终答案
-    final_answer = ""
-    if critic_issues:
-        # revise：真实流式（LLM重新生成）
+    # 5. 修订循环（**缓冲**，复核通过或预算用尽才输出）——绝不边改边喷未经复核的内容。
+    #    代价：revise 阶段不再逐字流式，改为最终答案分块流出；换取"给用户的内容一定复核过"。
+    from agents.limits import early_stop
+    step = 0
+    while critic_issues and not early_stop(step):
         revise_prompt = (
             f"原答案存在以下问题：{critic_issues}\n\n"
             f"请修正原答案，确保符合GMP法规要求：\n{draft}\n\n"
             f"只输出修正后的答案，不要解释修改原因。"
         )
-        try:
-            for chunk in _llm_chat_stream(
-                [{"role": "user", "content": revise_prompt}],
-                model=route_model("revise"),
-            ):
-                final_answer += chunk
-                yield f'data: {json.dumps({"chunk": chunk}, ensure_ascii=False)}\n\n'
-        except Exception:
-            final_answer = _llm_chat(
-                [{"role": "user", "content": revise_prompt}],
-                model=route_model("revise"),
-            )
-            yield f'data: {json.dumps({"chunk": final_answer}, ensure_ascii=False)}\n\n'
-    else:
-        # respond：分块流出已生成草稿，20ms间隔制造逐字显示效果
-        final_answer = draft
-        for i in range(0, len(draft), 8):
-            yield f'data: {json.dumps({"chunk": draft[i:i+8]}, ensure_ascii=False)}\n\n'
-            time.sleep(0.02)
+        draft = _llm_chat([{"role": "user", "content": revise_prompt}], model=route_model("revise"))
+        step += 1
+        critic_issues = _critique_answer(draft, reg_context, retrieved_ids)
+
+    # 预算用尽仍有未解决问题 → 如实降级，不静默输出
+    final_answer = draft + (_DEGRADE_NOTICE if critic_issues else "")
+
+    # 分块流出最终答案（逐字显示效果）
+    for i in range(0, len(final_answer), 8):
+        yield f'data: {json.dumps({"chunk": final_answer[i:i+8]}, ensure_ascii=False)}\n\n'
+        time.sleep(0.02)
 
     # 写入缓存（流式版本：回答完整后写入）
     if SEMANTIC_CACHE_ENABLED and query_vec:

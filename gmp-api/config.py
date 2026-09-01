@@ -16,6 +16,10 @@ MYSQL_DATABASE = os.getenv("MYSQL_DATABASE", "gmp")
 # 本机 portable MySQL 连 localhost 无需 SSL；SSL 握手每次约 30–200ms，是检索延迟主因。
 # 生产用远程需 SSL 的库时设为 false。
 MYSQL_SSL_DISABLED = os.getenv("MYSQL_SSL_DISABLED", "true").lower() == "true"
+MYSQL_POOL_SIZE = int(os.getenv("MYSQL_POOL_SIZE", "8"))
+MYSQL_POOL_ACQUIRE_TIMEOUT_SEC = float(
+    os.getenv("MYSQL_POOL_ACQUIRE_TIMEOUT_SEC", "1.0")
+)
 
 # 统一使用通义千问（DashScope）——LLM和Embedding共用同一个Key和BaseURL
 DASHSCOPE_BASE_URL = os.getenv("DASHSCOPE_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1")
@@ -67,6 +71,7 @@ LLM_MODEL_HEAVY = os.getenv("LLM_MODEL_HEAVY", LLM_MODEL)      # 重推理/criti
 
 # 并行检索（02-context-perf）
 RAG_PARALLEL_RETRIEVE = os.getenv("RAG_PARALLEL_RETRIEVE", "true").lower() == "true"
+RAG_RETRIEVE_WORKERS = int(os.getenv("RAG_RETRIEVE_WORKERS", "4"))
 
 # 混合检索融合权重（spec P2：min-max 归一化后加权融合）
 RAG_FUSION_VEC_WEIGHT  = float(os.getenv("RAG_FUSION_VEC_WEIGHT",  "0.6"))

@@ -6,6 +6,7 @@ python-dotenv==1.0.1
 langchain-core>=0.2.27,<0.3
 langgraph>=0.2.0,<0.3
 pymysql==1.1.1
+DBUtils==3.1.2
 hnswlib==0.8.0
 numpy>=1.26
 pytest>=8.0

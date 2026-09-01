@@ -8,17 +8,14 @@ RAG检索模块：向量检索 + FULLTEXT混合检索 + 知识图谱遍历（MyS
   4. 全候选统一向量打分排序，取 top-N 输出
 """
 import re
-from concurrent.futures import ThreadPoolExecutor
+import time
 from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 
 import httpx
-import pymysql
-import pymysql.cursors
 
 from config import (
-    MYSQL_HOST, MYSQL_PORT, MYSQL_USER, MYSQL_PASSWORD, MYSQL_DATABASE,
-    MYSQL_SSL_DISABLED,
     EMB_BASE_URL, EMB_API_KEY, EMB_MODEL,
     RAG_TOP_K, RAG_GRAPH_HOP, RAG_THRESHOLD,
     RAG_GRAPH_THRESHOLD, RAG_FINAL_TOP_N,
@@ -27,6 +24,7 @@ from config import (
     RAG_FUSION_VEC_WEIGHT, RAG_FUSION_BM25_WEIGHT,
     RAG_HYDE_ENABLED,
 )
+from rag.resources import get_db_connection, get_retrieval_executor
 
 
 @dataclass
@@ -38,20 +36,49 @@ class DocChunk:
     score: float
 
 
+_RETRIEVAL_TIMING_STAGES = (
+    "retrieve_query_vector",
+    "retrieve_db_pool_wait",
+    "retrieve_executor_queue",
+    "retrieve_hnsw",
+    "retrieve_mysql",
+    "retrieve_recall_wall",
+    "retrieve_fusion",
+    "retrieve_graph_expand",
+    "retrieve_rerank",
+    "retrieve_assemble",
+)
+_active_retrieval_timings: ContextVar[dict[str, int] | None] = ContextVar(
+    "active_retrieval_timings", default=None,
+)
+
+
+@contextmanager
+def capture_retrieval_timings():
+    """采集当前请求的检索子阶段耗时；ContextVar 防止并发请求互相串数据。"""
+    timings = {stage: 0 for stage in _RETRIEVAL_TIMING_STAGES}
+    token = _active_retrieval_timings.set(timings)
+    try:
+        yield timings
+    finally:
+        _active_retrieval_timings.reset(token)
+
+
+def _elapsed_ms(started_at: float) -> int:
+    return max(0, int((time.monotonic() - started_at) * 1000))
+
+
+def _add_retrieval_timing(stage: str, elapsed_ms: int) -> None:
+    timings = _active_retrieval_timings.get()
+    if timings is not None:
+        timings[stage] = timings.get(stage, 0) + max(0, elapsed_ms)
+
+
 @contextmanager
 def _get_conn():
-    conn = pymysql.connect(
-        host=MYSQL_HOST, port=MYSQL_PORT,
-        user=MYSQL_USER, password=MYSQL_PASSWORD,
-        database=MYSQL_DATABASE, charset='utf8mb4',
-        cursorclass=pymysql.cursors.Cursor,
-        connect_timeout=2,
-        ssl_disabled=MYSQL_SSL_DISABLED,  # 本机 localhost 免 SSL 握手：建连 ~30ms→~1ms（A3）
-    )
-    try:
+    """兼容既有调用方；实际连接由 RAG 共享连接池借出和归还。"""
+    with get_db_connection() as conn:
         yield conn
-    finally:
-        conn.close()
 
 
 def embed_query(text: str) -> list[float] | None:
@@ -163,22 +190,31 @@ def _fuse_scores(
     }
 
 
-def _parallel_fetch(question: str, query_vec: list[float], edu_level, idx):
+def _parallel_fetch(question: str, query_vec: list[float], edu_level, idx, conn):
     """
     并行检索内核：向量搜索（HNSW）与 MySQL FULLTEXT + article_lookup 同时执行。
     返回 (vector_hits, ft_ids, art_rows)
-    向量搜索纯内存无需 DB；MySQL 路径在此函数内用独立连接。
+    向量搜索提交给共享执行器；MySQL 在持有连接的请求线程执行。
     """
-    with ThreadPoolExecutor(max_workers=2) as ex:
-        f_vec = ex.submit(idx.search, query_vec, RAG_TOP_K * 4, edu_level)
+    recall_started_at = time.monotonic()
+    submitted_at = time.monotonic()
 
-        def _mysql_tasks():
-            with _get_conn() as c:
-                return _article_lookup(c, question), _fulltext_search(c, question, RAG_TOP_K)
+    def _vector_task():
+        started_at = time.monotonic()
+        queue_ms = _elapsed_ms(submitted_at)
+        hits = idx.search(query_vec, RAG_TOP_K * 4, edu_level)
+        return hits, _elapsed_ms(started_at), queue_ms
 
-        f_mysql = ex.submit(_mysql_tasks)
-        vector_hits = f_vec.result()
-        art_rows, ft_ids = f_mysql.result()
+    f_vec = get_retrieval_executor().submit(_vector_task)
+    mysql_started_at = time.monotonic()
+    art_rows = _article_lookup(conn, question)
+    ft_ids = _fulltext_search(conn, question, RAG_TOP_K)
+    mysql_ms = _elapsed_ms(mysql_started_at)
+    vector_hits, hnsw_ms, queue_ms = f_vec.result()
+    _add_retrieval_timing("retrieve_executor_queue", queue_ms)
+    _add_retrieval_timing("retrieve_hnsw", hnsw_ms)
+    _add_retrieval_timing("retrieve_mysql", mysql_ms)
+    _add_retrieval_timing("retrieve_recall_wall", _elapsed_ms(recall_started_at))
     return vector_hits, ft_ids, art_rows
 
 
@@ -194,6 +230,7 @@ def retrieve(question: str, edu_level: str | None = None,
     """
     from rag.vector_index import get_index
 
+    query_vector_started_at = time.monotonic()
     if RAG_HYDE_ENABLED:
         # HyDE 开启时，无论调用方是否传入 query_vec，都用 HyDE 向量做检索；
         # 调用方传入的 query_vec 仅用于缓存 key，不传给检索路径。
@@ -202,18 +239,33 @@ def retrieve(question: str, edu_level: str | None = None,
     elif query_vec is None:
         from rag.hyde import hyde_embed
         query_vec = hyde_embed(question) or embed_query(question)
+    _add_retrieval_timing(
+        "retrieve_query_vector", _elapsed_ms(query_vector_started_at),
+    )
     idx = get_index()
 
+    db_pool_started_at = time.monotonic()
     with _get_conn() as conn:
+        _add_retrieval_timing(
+            "retrieve_db_pool_wait", _elapsed_ms(db_pool_started_at),
+        )
         if not query_vec or idx is None or idx.size == 0:
-            return _keyword_fallback_chunks(conn, question, edu_level)
+            assemble_started_at = time.monotonic()
+            chunks = _keyword_fallback_chunks(conn, question, edu_level)
+            _add_retrieval_timing(
+                "retrieve_assemble", _elapsed_ms(assemble_started_at),
+            )
+            return chunks
 
         # 历史经验候选池（独立收集，不混入法规引用池；spec C6）
         all_experience: dict[str, tuple] = {}
 
         # ── 1+1b+2: 向量、article、FULLTEXT（串行或并行） ────────────────────
         if RAG_PARALLEL_RETRIEVE:
-            vector_hits, ft_ids_raw, art_rows = _parallel_fetch(question, query_vec, edu_level, idx)
+            vector_hits, ft_ids_raw, art_rows = _parallel_fetch(
+                question, query_vec, edu_level, idx, conn,
+            )
+            fusion_started_at = time.monotonic()
             # 将并行结果收集为原始分 → 后续 min-max 融合
             all_kp: dict[str, tuple] = {}
             _vec_reg_scores: dict[str, float] = {}
@@ -258,12 +310,19 @@ def retrieve(question: str, edu_level: str | None = None,
                 ranked = sorted(art_rows, key=lambda r: art_sims.get(r[0], 0.0), reverse=True)
                 for reg_id, art, content in ranked[:ARTICLE_HIT_CAP]:
                     all_reg[reg_id] = (reg_id, art or '', content or '', 1.0)
+            _add_retrieval_timing(
+                "retrieve_fusion", _elapsed_ms(fusion_started_at),
+            )
         else:
             # ── 1. 向量召回（HNSW，edu_level 在索引内过滤） ──────────────────
+            recall_started_at = time.monotonic()
             all_kp: dict[str, tuple] = {}
             _vec_reg_scores: dict[str, float] = {}
             _vec_reg_meta: dict[str, tuple] = {}
-            for h in idx.search(query_vec, k=RAG_TOP_K * 4, edu_level=edu_level):
+            hnsw_started_at = time.monotonic()
+            vector_hits = idx.search(query_vec, k=RAG_TOP_K * 4, edu_level=edu_level)
+            _add_retrieval_timing("retrieve_hnsw", _elapsed_ms(hnsw_started_at))
+            for h in vector_hits:
                 if h.score < RAG_THRESHOLD:
                     continue
                 if h.doc_type == 'kp':
@@ -277,10 +336,16 @@ def retrieve(question: str, edu_level: str | None = None,
                     _vec_reg_meta[h.id] = (h.title, h.content)
 
             # ── 1b. 硬指标：第X条精确命中（article_num 直查置顶） ──────────────
+            mysql_started_at = time.monotonic()
             art_rows = _article_lookup(conn, question)
 
             # ── 2. BM25(FULLTEXT) 召回 → cosine 重打分（全量，不过滤 vec 已命中项）
             _ft_ids_all = _fulltext_search(conn, question, RAG_TOP_K)
+            _add_retrieval_timing("retrieve_mysql", _elapsed_ms(mysql_started_at))
+            _add_retrieval_timing(
+                "retrieve_recall_wall", _elapsed_ms(recall_started_at),
+            )
+            fusion_started_at = time.monotonic()
             _bm25_sims = idx.similarity(query_vec, _ft_ids_all)
             _bm25_reg_scores: dict[str, float] = {
                 r: s for r, s in _bm25_sims.items() if s >= RAG_GRAPH_THRESHOLD
@@ -308,8 +373,12 @@ def retrieve(question: str, edu_level: str | None = None,
                 ranked = sorted(art_rows, key=lambda r: art_sims.get(r[0], 0.0), reverse=True)
                 for reg_id, art, content in ranked[:ARTICLE_HIT_CAP]:
                     all_reg[reg_id] = (reg_id, art or '', content or '', 1.0)
+            _add_retrieval_timing(
+                "retrieve_fusion", _elapsed_ms(fusion_started_at),
+            )
 
         # ── 3. kp_reg_links 一跳图遍历扩展 ──────────────────────────────────
+        graph_started_at = time.monotonic()
         extra_reg_ids, extra_kp_ids = _graph_expand(conn, list(all_reg), list(all_kp))
 
         for r_id, score in idx.similarity(query_vec, [r for r in extra_reg_ids if r not in all_reg]).items():
@@ -328,8 +397,12 @@ def retrieve(question: str, edu_level: str | None = None,
             if edu_level and rec.get('edu_level') and rec['edu_level'] != edu_level:
                 continue
             all_kp[k_id] = (k_id, rec['title'], rec['content'], score)
+        _add_retrieval_timing(
+            "retrieve_graph_expand", _elapsed_ms(graph_started_at),
+        )
 
         # ── 4. 排序截取 top-N ────────────────────────────────────────────────
+        assemble_started_at = time.monotonic()
         # 经验条独立池：不参与 rerank 竞争，始终追加末尾（spec C6：0.5x 低权重辅助参考）。
         # exp_cap = min(2, TOP_N//2)：经验最多 2 席，且永远不超过主内容席位（保证法规/知识点占多数）。
         exp_cap = min(2, RAG_FINAL_TOP_N // 2)
@@ -353,19 +426,31 @@ def retrieve(question: str, edu_level: str | None = None,
             chunks.append(DocChunk(r_id, 'regulation', title, content, score))
         for k_id, title, content, score in sorted_kp:
             chunks.append(DocChunk(k_id, 'kp', title, content, score))
+        _add_retrieval_timing(
+            "retrieve_assemble", _elapsed_ms(assemble_started_at),
+        )
 
-        if RAG_RERANK_ENABLED and chunks:
-            from rag.reranker import rerank as _rerank
-            # experience 不参与 rerank，只对 reg/kp 重排；top_n = 主内容预算
-            chunks = _rerank(question, chunks[:RAG_RERANK_TOP_BEFORE],
-                             top_n=main_budget, rerank_fn=rerank_fn)
-        else:
-            chunks = chunks[:main_budget]
+    # 候选生成所需的 SQL 已结束；先归还连接，再等待外部 rerank 网络调用。
+    rerank_started_at = time.monotonic()
+    if RAG_RERANK_ENABLED and chunks:
+        from rag.reranker import rerank as _rerank
+        # experience 不参与 rerank，只对 reg/kp 重排；top_n = 主内容预算
+        chunks = _rerank(question, chunks[:RAG_RERANK_TOP_BEFORE],
+                         top_n=main_budget, rerank_fn=rerank_fn)
+    else:
+        chunks = chunks[:main_budget]
+    _add_retrieval_timing(
+        "retrieve_rerank", _elapsed_ms(rerank_started_at),
+    )
 
-        # 追加经验条至末尾（始终在法规/知识点之后，总量 = len(reg/kp) + len(exp) ≤ RAG_FINAL_TOP_N）
-        chunks = chunks + exp_chunks
+    # 追加经验条至末尾（始终在法规/知识点之后，总量 = len(reg/kp) + len(exp) ≤ RAG_FINAL_TOP_N）
+    assemble_started_at = time.monotonic()
+    chunks = chunks + exp_chunks
+    _add_retrieval_timing(
+        "retrieve_assemble", _elapsed_ms(assemble_started_at),
+    )
 
-        return chunks
+    return chunks
 
 
 def _keyword_fallback_chunks(conn, question: str, edu_level: str | None) -> list[DocChunk]:

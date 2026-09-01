@@ -2,6 +2,8 @@
 GMP Agent FastAPI 后端
 运行方式：cd gmp-api && uvicorn main:app --reload --port 8001
 """
+from contextlib import asynccontextmanager
+
 from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
@@ -12,11 +14,8 @@ from agents.tool_agent import ask_agent, route_intent
 from agents.hitl import approve as hitl_approve, get_pending as hitl_pending
 from config import HITL_API_KEY
 from rag import vector_index
+from rag.resources import close_rag_resources
 
-app = FastAPI(title="GMP Agent API", version="0.1.0")
-
-
-@app.on_event("startup")
 def _build_vector_index() -> None:
     """启动时一次性构建进程内向量索引；失败则降级（retriever 自带关键词兜底）。"""
     try:
@@ -35,6 +34,19 @@ def _build_vector_index() -> None:
     except Exception as e:  # noqa: BLE001
         print(f"[startup] 向量索引构建失败，降级运行：{e}")
 
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """启动时预热 RAG，退出时统一释放连接池和共享执行器。"""
+    _build_vector_index()
+    try:
+        yield
+    finally:
+        close_rag_resources()
+
+
+app = FastAPI(title="GMP Agent API", version="0.1.0", lifespan=lifespan)
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:3000"],  # Next.js开发服务器
@@ -46,6 +58,7 @@ app.add_middleware(
 # ── 请求/响应模型 ──────────────────────────────────────────────────────────────
 class ChatRequest(BaseModel):
     question: str
+    include_timings: bool = False               # 显式开启时返回非流式 Agent 阶段耗时
     edu_level: str | None = None                # '专科' | '本科' | None
     history: list[dict] | None = None           # [{role, content}, ...]，前端传最近N轮
     user_id: str | None = None                  # 用户 ID（有值时启用四层记忆）
@@ -55,6 +68,8 @@ class ChatResponse(BaseModel):
     answer: str
     sources: list[str]
     critic_triggered: bool
+    timings_ms: dict[str, int] | None = None
+    stage_counts: dict[str, int] | None = None
 
 
 class AgentRequest(BaseModel):
@@ -89,13 +104,23 @@ def health():
     return {"status": "ok"}
 
 
-@app.post("/chat/tutor", response_model=ChatResponse)
+@app.post(
+    "/chat/tutor",
+    response_model=ChatResponse,
+    response_model_exclude_none=True,
+)
 def chat_tutor(req: ChatRequest):
     if not req.question.strip():
         raise HTTPException(status_code=400, detail="question不能为空")
     result = ask_tutor(req.question, edu_level=req.edu_level, history=req.history,
                        user_id=req.user_id)
-    return ChatResponse(**result)
+    return ChatResponse(
+        answer=result["answer"],
+        sources=result["sources"],
+        critic_triggered=result["critic_triggered"],
+        timings_ms=result.get("timings_ms") if req.include_timings else None,
+        stage_counts=result.get("stage_counts") if req.include_timings else None,
+    )
 
 
 @app.post("/chat/tutor/stream")
