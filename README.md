@@ -1,82 +1,71 @@
 <div align="center">
 
-<img src="./gmp-web/public/gmp-logo.png" alt="GMP Agent Logo" width="96"/>
+<img src="./gmp-web/public/gmp-logo.png" alt="GMP Agent Logo" width="104" />
 
-# GMP Learning Agent
+# GMP Agent · 智药境
 
-### AI-Powered GMP Education Platform for Pharmaceutical Students
+### 把 GMP 教材，变成一座可以探索、对话与推演的虚拟药厂
 
-**[中文文档](./README_CN.md)** · **English**
+一个会检索法规、记住学习进度、调用工具并自我校验的 AI 原生教学平台。
 
-<br/>
+**简体中文** · **[English](./README_EN.md)**
 
-[![Next.js](https://img.shields.io/badge/Next.js-15-black?logo=next.js&logoColor=white)](https://nextjs.org/)
-[![FastAPI](https://img.shields.io/badge/FastAPI-0.115-009688?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
-[![LangGraph](https://img.shields.io/badge/LangGraph-Agentic_RAG-FF6B35)](https://langchain-ai.github.io/langgraph/)
-[![TypeScript](https://img.shields.io/badge/TypeScript-5-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
-[![MySQL](https://img.shields.io/badge/MySQL-9.x-4479A1?logo=mysql&logoColor=white)](https://www.mysql.com/)
-[![Tests](https://img.shields.io/badge/Tests-230_passing-22c55e)](./gmp-api)
-[![License](https://img.shields.io/badge/License-MIT-22c55e)](LICENSE)
+<p>
+  <img src="https://img.shields.io/badge/Agent-LangGraph-1d6f78?style=for-the-badge" alt="LangGraph Agent" />
+  <img src="https://img.shields.io/badge/RAG-Hybrid_Retrieval-c8812b?style=for-the-badge" alt="Hybrid RAG" />
+  <img src="https://img.shields.io/badge/Next.js-16-black?style=for-the-badge&logo=next.js" alt="Next.js 16" />
+  <img src="https://img.shields.io/badge/FastAPI-0.115-009688?style=for-the-badge&logo=fastapi" alt="FastAPI" />
+  <img src="https://img.shields.io/badge/Pytest-302_passed-22c55e?style=for-the-badge&logo=pytest" alt="302 tests passed" />
+</p>
 
-<br/>
-
-> *Real GMP inspection defects → adaptive learning scenarios → gamified mastery.*
-> Built for pharmacy & pharmaceutical engineering students in China.
+> **From regulation to simulation. From answering questions to building judgment.**
 
 </div>
 
----
+<p align="center">
+  <img src="./gmp-web/public/simulation/gmp-layout/master/药厂虚拟仿真总平面布局图-一体化游戏图-预览-2048x1536-v5.png" alt="GMP 虚拟药厂一体化总布局图" width="100%" />
+</p>
 
-## What is this?
-
-China's **Good Manufacturing Practice (GMP)** regulation is the backbone of pharmaceutical quality management — and one of the hardest subjects to teach effectively.
-
-This platform transforms **real GMP inspection findings** from Zhejiang Province (2022–2025) into interactive learning: knowledge graphs, AI tutoring with tool-calling, simulation exams, course modules with discussion forums, and a gamified progression system — all tailored to the student's major and dosage-form track. Teachers and admins get a dedicated portal to manage courses, assignments, and analytics.
+<p align="center"><sub>审查版虚拟药厂总图 · 9 大功能分区 · 从人员入口到三废处理的完整生产空间</sub></p>
 
 ---
 
-## Features
+## 这不只是一个问答机器人
+
+传统 GMP 学习往往停留在“记条文、背答案”。GMP Agent 试图再往前走一步：把法规、真实检查缺陷、课程任务、个人掌握度和虚拟生产场景连接起来，让学生在一次次提问、判断和行动中形成质量意识。
+
+学生看到的是一个随时在线的学习伙伴；系统背后运行的是一条可检索、可追踪、可校验、可评估的 Agent 链路。
 
 <table>
 <tr>
-<td width="50%">
+<td width="50%" valign="top">
 
-**🤖 Enterprise-Grade RAG Agent**
-LangGraph `retrieve → generate → critique → respond` pipeline with full **Function Calling** (7-step FC loop, 6 built-in tools). HNSW + BM25 hybrid retrieval, gte-rerank cross-encoder, small-to-big chunking. Every answer cites the exact GMP clause. Hard constraint protection ensures negations ("不得"/"禁止") are never dropped by compression. Conversations are **persisted** — pick up where you left off.
+### 🤖 会查、会想、会纠错
 
-</td>
-<td width="50%">
-
-**📚 Full Course Module**
-11 chapters mapped to T01–T11 training projects. Each chapter has: KP list with mastery, regulation references, an AI classroom, a chapter quiz, simulation drill, discussion forum, and assignment submissions — all in one place.
+Tutor Agent 使用 LangGraph 组织 `检索 → 生成 → 批判 → 修订 → 回答`。答案不只来自模型参数，还会经过法规检索、重排和事实一致性检查，并保留条款来源。
 
 </td>
-</tr>
-<tr>
-<td>
+<td width="50%" valign="top">
 
-**🎯 Defect-Driven Learning**
-Real inspection data (top defect clauses, severity distribution) shapes every exercise, case, and quiz — not textbook theory alone. 590 skill points extracted from 13 defect template documents.
+### 🧠 真正连续的个性化学习
 
-</td>
-<td>
-
-**🎮 Gamified Progression**
-Three-currency system: XP (character level) · Points (rewards) · Credits (academic score). Daily streaks, module unlocks, boss battles, class leaderboard. Spaced-repetition review queue driven by forgetting-curve data.
+用户画像、递归摘要、工作记忆与经验召回共同组成分层记忆。系统既能接住当前对话，也能根据专业、学段和历史薄弱点调整解释方式。
 
 </td>
 </tr>
 <tr>
-<td>
+<td valign="top">
 
-**🗺️ Knowledge Graph**
-469 knowledge points visualized as a force-directed graph (ECharts). Personal mastery overlay with 4-tier color scale — see exactly where you stand across 7,290 KP→regulation edges.
+### 🎮 把知识放进场景里
+
+11 个课程项目与虚拟药厂场景相互映射。学习不再只有章节列表，还包括地图探索、案例推演、章节测验、Boss 战、排行榜和间隔复习。
 
 </td>
-<td>
+<td valign="top">
 
-**👩‍🏫 Teacher & Admin Portals**
-Teachers publish assignments, view class analytics, browse the question bank, and export CSVs. Admins manage users, knowledge-point dependencies, and system config — all without touching the database.
+### 🛡️ 为可靠性设置边界
+
+工具参数校验、超时与退避重试、循环步数限制、重复调用检测、敏感操作人工确认和降级回答，共同约束 Agent 的不确定行为。
 
 </td>
 </tr>
@@ -84,208 +73,197 @@ Teachers publish assignments, view class analytics, browse the question bank, an
 
 ---
 
-## Architecture
+## 一次提问，背后发生了什么
 
-```
-┌──────────────────────────────────────────────┐
-│               gmp-web  (Frontend)             │
-│  Next.js 15 · TypeScript · Tailwind · Radix   │
-│  ECharts · Drizzle ORM · MySQL2               │
-└──────────────────┬───────────────────────────┘
-                   │  REST API + SSE stream
-┌──────────────────▼───────────────────────────┐
-│               gmp-api  (Backend)              │
-│  FastAPI · LangGraph · pymysql                │
-│                                               │
-│  ┌─────────────────────────────────────────┐ │
-│  │           Four-Layer Memory             │ │
-│  │  user profile · summary · working mem   │ │
-│  └─────────────────────────────────────────┘ │
-│                                               │
-│  ┌─────────────────────────────────────────┐ │
-│  │         RAG Pipeline (Spec 01-02)        │ │
-│  │  Semantic Cache → HNSW + BM25 Hybrid    │ │
-│  │  gte-rerank → Hard Constraint Guard     │ │
-│  │  Token Compression → Head-Tail Reorder  │ │
-│  └─────────────────────────────────────────┘ │
-│                                               │
-│  ┌─────────────────────────────────────────┐ │
-│  │      Agent & Tool Loop (Spec 05-06)     │ │
-│  │  7-step FC loop · 6 tools · Loop Guard  │ │
-│  │  HITL gate · MCP Server (default off)   │ │
-│  └─────────────────────────────────────────┘ │
-│                                               │
-│  ┌─────────────────────────────────────────┐ │
-│  │       Evaluation Loop (Spec 04/07)      │ │
-│  │  RAGAS 3-dim · SelfCheckGPT · CoVe      │ │
-│  │  35-item golden set · error book        │ │
-│  └─────────────────────────────────────────┘ │
-│                                               │
-│  Qwen3-max + qwen-turbo  (DashScope)          │
-└──────────────────────────────────────────────┘
-                   │  shared
-┌──────────────────▼───────────────────────────┐
-│         MySQL 9.x  (single database)          │
-│  25 tables · 37,000+ rows · FULLTEXT indexed  │
-└──────────────────────────────────────────────┘
+```mermaid
+flowchart LR
+    Q[学生提问] --> C[画像与对话上下文]
+    C --> S{语义缓存}
+    S -->|命中| A[组织答案]
+    S -->|未命中| R[HNSW + BM25 混合检索]
+    R --> RR[gte-rerank 精排]
+    RR --> P[硬约束保护与上下文压缩]
+    P --> G[LLM 生成]
+    G --> V{Critic / CoVe 校验}
+    V -->|需要修订| G
+    V -->|通过| T{是否需要工具}
+    T -->|是| F[受控 Function Calling]
+    F --> A
+    T -->|否| A
+    A --> M[持久化、反馈与评测]
 ```
 
-**Tutor Agent pipeline**
-
-```
-question → [semantic cache]  hit → return in <100ms
-         → [retrieve]   HNSW + BM25 hybrid → gte-rerank → small-to-big
-         → [compress]   hard constraint protection + token compression
-         → [generate]   Qwen3-max
-         → [critique]   hallucination check + CoVe online correction
-         → [tool loop]  FC 7-step if action intent detected (Guard: max 8 steps)
-         → [respond]    answer + GMP clause citations  (SSE stream)
-         → [persist]    chat_messages → shown on next load
-         → [feedback]   "wrong answer" → error_book → few-shot injection
-```
+这条链路的重点不是“多调用几次大模型”，而是把每个不确定环节变成可以观察和约束的工程节点：检索是否召回、上下文是否丢失否定词、工具是否真的执行、修订是否改善答案，都可以单独测试。
 
 ---
 
-## Dataset at a Glance
+## 走进虚拟药厂
 
-| Dataset | Count |
-|---------|------:|
-| Knowledge points (associate + bachelor dual-track) | **469** |
-| KP → regulation clause edges | **7,290** |
-| GMP 2010 regulation library (articles + annexes) | **1,740** |
-| Question bank (MCQ / multi-select / T-F / essay) | **543** |
-| Case library (5 dosage-form categories, 18 products) | **117** |
-| Skill points (extracted from defect template docs) | **590** |
-| Skill → KP links (3-tier confidence) | **24,145** |
-| Training projects (simulation scenarios) | **11** |
-| RAGAS golden set (evaluation) | **35** |
+总图之外，系统已经沉淀 9 张经过审查的独立分区图，可作为后续地图交互、任务落点和空间化教学的统一视觉底座。
 
----
-
-## Role Map
-
-| Role | Entry | Capabilities |
-|------|-------|-------------|
-| **Student** | `/dashboard` → onboarding pre-test | All learning features + gamification |
-| **Teacher** | `/teacher` | Assignments, student analytics, question bank, CSV export |
-| **Admin** | `/admin` | User CRUD, KP dependency graph, system config |
+<table>
+<tr>
+<td width="33%" align="center" valign="top">
+  <img src="./gmp-web/public/simulation/gmp-layout/partitions/03-检验区QC-纯游戏化-v1.png" alt="检验区 QC" width="100%" /><br />
+  <sub><b>检验区 QC</b><br />把取样、检验与数据完整性放进现场</sub>
+</td>
+<td width="33%" align="center" valign="top">
+  <img src="./gmp-web/public/simulation/gmp-layout/partitions/04-片剂车间-纯游戏化-v1.png" alt="片剂车间" width="100%" /><br />
+  <sub><b>片剂车间</b><br />从物料流转到生产偏差的完整任务空间</sub>
+</td>
+<td width="33%" align="center" valign="top">
+  <img src="./gmp-web/public/simulation/gmp-layout/partitions/09-三废处理区-纯游戏化-v1.png" alt="三废处理区" width="100%" /><br />
+  <sub><b>三废处理区</b><br />把合规边界延伸到生产系统之外</sub>
+</td>
+</tr>
+</table>
 
 ---
 
-## Quick Start
+## 为什么这样设计
 
-> Full setup: [SETUP.md](./SETUP.md)
+| 设计选择 | 项目中的思考 |
+|---|---|
+| **中心化编排，而非自由协商的多 Agent** | 教学场景更看重过程可控、结果可解释和责任边界。由 Tutor Agent 统一维护状态与路由，专项能力通过工具和节点扩展，减少状态冲突与不可预测成本。 |
+| **HNSW + BM25，而非只做向量检索** | GMP 问题既有语义表达，也包含条款号、术语和精确否定词。稠密检索负责“意思接近”，关键词检索负责“字面不能错”，再由重排器统一排序。 |
+| **Small-to-Big 分块** | 小块提高召回精度，大块补足条文上下文；避免固定大 Chunk 把多个主题混在一起，也避免过小 Chunk 截断前提条件。 |
+| **独立 Critic 与修订回路** | 生成模型“回答得像”不等于“依据正确”。Critic 检查法规引用、上下文一致性和明显幻觉，失败时触发有限次数的修订，而不是无限自循环。 |
+| **分层记忆，而非无限拼接历史** | 短期窗口保证当前语义，递归摘要控制 Token，画像保存稳定偏好，经验召回只在相关问题出现时注入。上下文越长并不必然越好。 |
+| **先做可重复评测，再做模型对比** | 系统已有固定黄金集、客观题集和专家论述题集。多 LLM 消融被明确放在 Roadmap 中，避免在评价基准不稳定时得出漂亮但无意义的结论。 |
 
-**Prerequisites:** Node 20+, Python 3.11+, MySQL 8+
+---
+
+## 项目规模，一眼看懂
+
+| **知识底座** | **学习内容** | **质量验证** | **沉浸场景** |
+|:---:|:---:|:---:|:---:|
+| **469** 个知识点 | **543** 道课程题目 | **302** 项测试通过 | **9** 个审查分区 |
+| **7,290** 条知识点—法规边 | **117** 个案例 | **35** 条 RAG 黄金集 | **11** 个课程项目 |
+| **1,740** 条法规与附录内容 | **590** 个技能点 | **505 + 38** 条专项评测样本 | **1** 张一体化药厂总图 |
+
+> 大规模课程与知识图谱数据通过 MySQL 管理，仓库不直接分发教学数据库 dump。
+
+---
+
+## Agent 的工程底座
+
+```text
+┌──────────────────────────────────────────────────────────┐
+│  gmp-web · Next.js 16 · React 19 · TypeScript · ECharts │
+│  学生端 / 教师端 / 管理端 / 游戏化仿真 / SSE 流式交互     │
+└────────────────────────────┬─────────────────────────────┘
+                             │ REST + SSE
+┌────────────────────────────▼─────────────────────────────┐
+│  gmp-api · FastAPI · LangGraph                          │
+│                                                          │
+│  Tutor Graph     retrieve → generate → critique → revise │
+│  Retrieval       HNSW + MySQL FULLTEXT + rerank          │
+│  Memory          profile + summary + working + experience│
+│  Tool Runtime    6 tools + schema + retry + HITL + guard │
+│  Evaluation      RAGAS + SelfCheckGPT + CoVe + baselines │
+└────────────────────────────┬─────────────────────────────┘
+                             │ pooled access
+┌────────────────────────────▼─────────────────────────────┐
+│  MySQL 8+ · 课程 / 法规 / 题库 / 学习轨迹 / Agent 状态     │
+└──────────────────────────────────────────────────────────┘
+```
+
+| 层次 | 主要技术 |
+|---|---|
+| Web | Next.js 16.2、React 19、TypeScript、Tailwind CSS、Radix UI、ECharts |
+| Agent API | FastAPI 0.115、LangGraph、Pydantic、SSE |
+| LLM | 通义千问、`text-embedding-v3`、`gte-rerank` |
+| Retrieval | `hnswlib`、MySQL FULLTEXT、混合融合、重排与约束保护 |
+| Reliability | 连接池、共享检索执行器、超时重试、循环守卫、HITL、请求级耗时观测 |
+| Evaluation | RAGAS、锚点召回指标、SelfCheckGPT、CoVe、并发基线 |
+
+---
+
+## 评测不是发布前的一次考试
+
+- **RAG 黄金集：** 35 条固定问题，记录检索上下文、配置和运行元数据，避免评测结果无法复现。
+- **专项题集：** 505 条客观题与 38 条专家论述题分离管理，既测确定性知识，也测开放回答质量。
+- **链路级测试：** 覆盖分块、召回融合、重排、硬约束保留、Critic 修订、记忆、工具超时、重试、权限与循环保护。
+- **性能基线：** 记录端到端耗时及 retrieve / generate / critique 等阶段耗时，并提供受控并发脚本。
+- **下一阶段：** 在同一数据集、提示词、检索上下文和温度配置下开展多 LLM 消融，区分模型能力与系统工程收益。
+
+---
+
+<details>
+<summary><b>🚀 本地启动</b></summary>
+
+### 环境要求
+
+- Node.js 20+
+- Python 3.11+
+- MySQL 8+
 
 ```bash
-# 1. Clone
+# 1. 克隆项目
 git clone https://github.com/Cryptic-LEY/gmp-agent.git
 cd gmp-agent
 
-# 2. Database — run the DDL against your MySQL instance
+# 2. 初始化数据库
 mysql -u root gmp < gmp-web/db/migrations-mysql/0000_init_mysql.sql
 
-# 3. Frontend
+# 3. 启动 Web
 cd gmp-web
 npm install
-cp .env.local.example .env.local   # fill JWT_SECRET + MySQL credentials
-npm run dev                         # → http://localhost:3000
+cp .env.local.example .env.local
+npm run dev
 
-# 4. Backend
+# 4. 启动 Agent API
 cd ../gmp-api
 pip install -r requirements.txt
-cp .env.example .env               # fill DASHSCOPE_API_KEY + MySQL credentials
+cp .env.example .env
 uvicorn main:app --reload --port 8001
 ```
 
-> The question bank and knowledge graph data (~37,000 rows) are not in the repo. Contact the maintainer for a MySQL dump.
+Web 默认运行在 `http://localhost:3000`，Agent API 默认运行在 `http://localhost:8001`。完整配置见 [SETUP.md](./SETUP.md)。
 
----
+</details>
 
-## Project Structure
+<details>
+<summary><b>🗂️ 项目结构</b></summary>
 
-```
+```text
 gmp-agent/
-├── gmp-web/                        # Next.js 15 frontend + API routes
-│   ├── app/
-│   │   ├── (main)/
-│   │   │   ├── dashboard/          # Hero stats, knowledge graph, streaks
-│   │   │   ├── course/             # 11-chapter course module
-│   │   │   │   └── [trainingId]/   # Chapter detail: quiz, sim, discussion, assignments
-│   │   │   ├── chat/               # AI tutor (persistent, with feedback)
-│   │   │   ├── practice/           # Daily adaptive quiz (5 modes)
-│   │   │   ├── simulation/         # RPG-style case exam (map, boss, wallet)
-│   │   │   ├── plan/               # Personalized learning plan
-│   │   │   ├── report/             # Score & KP mastery report
-│   │   │   └── profile/            # Student info & settings
-│   │   ├── admin/                  # Admin portal
-│   │   ├── teacher/                # Teacher portal
-│   │   └── api/                    # Route handlers (39 endpoints)
-│   └── db/
-│       ├── schema.ts               # Drizzle ORM — 25 tables
-│       └── migrations-mysql/       # Full MySQL DDL history
-│
-├── gmp-api/                        # FastAPI + LangGraph backend
-│   ├── agents/
-│   │   ├── tutor.py                # LangGraph Tutor Agent + CoVe
-│   │   ├── tool_agent.py           # 7-step Function Calling loop
-│   │   ├── guard.py                # Loop guard (steps + tokens + repeat detection)
-│   │   ├── hitl.py                 # Human-in-the-loop approval gate
-│   │   ├── router.py               # Large/small model routing
-│   │   └── limits.py               # MAX_REASONING_STEPS soft cap
-│   ├── rag/
-│   │   ├── retriever.py            # HNSW + BM25 hybrid retrieval
-│   │   ├── vector_index.py         # In-process HNSW index (faiss)
-│   │   ├── embedder.py             # text-embedding-v3 batch generation
-│   │   ├── reranker.py             # gte-rerank cross-encoder
-│   │   ├── chunker.py              # Small-to-big chunking (300/1800 chars)
-│   │   ├── compressor.py           # Hard constraint protection + token compression
-│   │   └── hyde.py                 # HyDE (default off)
-│   ├── tools/                      # Tool framework (base, registry, validation, runtime)
-│   │   └── builtin/                # 6 built-in tools (search, profile, learning, content)
-│   ├── memory/                     # Four-layer memory (profile, summary, experience)
-│   ├── cache/                      # Semantic cache (cosine similarity LRU)
-│   ├── eval/                       # RAGAS eval, SelfCheckGPT, golden set, error book
-│   ├── mcp/                        # MCP Server (Tools/Resources/Prompts, default off)
-│   ├── migrations/                 # MySQL migration SQL files
-│   ├── main.py                     # FastAPI entry: /chat/tutor, /chat/agent, /chat/feedback
-│   └── config.py                   # All tunable parameters (22 new configs)
-│
-└── SETUP.md
+├── gmp-web/              # Next.js Web、角色门户与虚拟仿真
+│   ├── app/              # Dashboard、Course、Chat、Practice、Simulation
+│   ├── db/               # Drizzle Schema 与 MySQL migrations
+│   └── public/           # Logo、地图与场景素材
+├── gmp-api/              # FastAPI + LangGraph Agent 服务
+│   ├── agents/           # Tutor Graph、Tool Agent、Guard、HITL
+│   ├── rag/              # Chunk、HNSW、BM25、Rerank、Compression
+│   ├── memory/           # Profile、Summary、Working、Experience
+│   ├── tools/            # 工具注册、参数校验与受控运行时
+│   └── eval/             # 黄金集、专项题集、RAG 与性能评测
+├── specs/                # 核心能力规格与验收标准
+└── SETUP.md              # 完整启动说明
 ```
 
----
-
-## Tech Stack
-
-| Layer | Technologies |
-|-------|-------------|
-| Frontend | Next.js 15, React 19, TypeScript, Tailwind CSS, Radix UI, ECharts |
-| Backend | FastAPI, LangGraph, Python 3.11 |
-| AI / LLM | Qwen3-max + qwen-turbo (DashScope), `text-embedding-v3`, `gte-rerank` |
-| Retrieval | In-process HNSW (faiss) + MySQL FULLTEXT (BM25) + gte-rerank + KP graph hop |
-| Memory | Four-layer: user profile card · recursive summary · working memory · experience recall |
-| Evaluation | RAGAS (CP/FF/AR) · SelfCheckGPT · CoVe · 35-item golden set · error book |
-| Agent | 7-step FC loop · 6 tools · loop guard · HITL · MCP Server |
-| Database | MySQL 9.x, Drizzle ORM (mysql2) |
-| Auth | JWT (jose) + bcrypt |
-| Tests | 230 pytest tests (all passing, zero paid-API dependencies) |
+</details>
 
 ---
 
-## Use Cases
+## Roadmap
 
-- **University courses** — Supports 48-credit (associate) and 54-credit (bachelor) dual-track curricula; academic credits tracked per module
-- **Self-hosted by colleges** — Single MySQL instance; teacher + admin portals included out of the box
-- **GMP certification prep** — Full coverage of GMP 2010 (313 articles) + all annexes, linked to 469 knowledge points
+- [x] 混合检索、重排、小到大分块与硬约束保护
+- [x] 分层记忆、Agent 工具循环、超时重试与人工确认
+- [x] 可复现 RAG / 客观题 / 专家论述题评测基线
+- [x] 受控并发与阶段耗时观测
+- [x] 9 大分区与一体化虚拟药厂视觉底座
+- [ ] 多 LLM 消融与成本—质量—延迟联合对比
+- [ ] Redis 分布式状态、限流、熔断与任务队列的生产化收口
 
 ---
 
 <div align="center">
 
-Built for pharmaceutical education in China
+### 让法规不止被记住，更能在真实情境中被正确使用。
 
-*Powered by [LangGraph](https://langchain-ai.github.io/langgraph/) · [Qwen3](https://qwenlm.github.io/) · [Next.js](https://nextjs.org/)*
+Built with **LangGraph · Qwen · Next.js · FastAPI**
+
+[English](./README_EN.md) · [启动指南](./SETUP.md)
 
 </div>

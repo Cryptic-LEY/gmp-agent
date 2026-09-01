@@ -95,6 +95,7 @@ start.ps1
 *.md
 !README.md
 !README_CN.md
+!README_EN.md
 !SETUP.md
 !gmp-web/README.md
 
