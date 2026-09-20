@@ -168,11 +168,13 @@ The map is more than a backdrop. Each zone can host course entry points, risk ev
 
 | **Knowledge system** | **Learning content** | **Quality evidence** | **Simulation** |
 |:---:|:---:|:---:|:---:|
-| **469** knowledge points | **543** course questions | **302** tests passed | **9** reviewed zones |
-| **7,290** regulation links | **117** production cases | **35** RAG golden items | **11** course projects |
-| **1,740** regulation records | **590** skill points | **505 + 38** evaluation items | **1** integrated master map |
+| **472** knowledge points (**447** linked to regulations) | **543** course questions | **302** tests passed | **9** reviewed zones |
+| **5,498** RAG knowledge point–regulation links | **117** production cases | **38** expert-reviewed RAG golden items | **11** course projects |
+| **1,768** regulation records | **590** skill points | **505 + 38** evaluation items | **1** integrated master map |
 
 Each number represents a delivered layer of knowledge modeling, course production, system verification, or scenario design—not volume for its own sake.
+
+As of September 20, 2026, the domain knowledge graph contains **29,918** current relationships: 5,498 knowledge point–regulation links, 22,378 skill–knowledge point links, 1,135 skill–regulation links, and 907 skill–training project links. The Tutor's RAG graph expansion currently uses the 5,498 knowledge point–regulation links; 25 knowledge points do not yet have a regulation link.
 
 ---
 
