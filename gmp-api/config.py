@@ -89,6 +89,13 @@ MEMORY_ENABLED        = os.getenv("MEMORY_ENABLED",        "true").lower() == "t
 SUMMARY_TRIGGER_TURNS = int(os.getenv("SUMMARY_TRIGGER_TURNS", "6"))
 PROFILE_ASYNC         = os.getenv("PROFILE_ASYNC",         "true").lower() == "true"
 
+# Critic/Revise 可收敛修复 V2（05-critic-revise-hardening）——默认关，保持现有生产行为。
+# 仅当 TUTOR_REPAIR_V2_ENABLED=true 时下列参数生效；旧链路继续用 MAX_REASONING_STEPS。
+TUTOR_REPAIR_V2_ENABLED     = os.getenv("TUTOR_REPAIR_V2_ENABLED",     "false").lower() == "true"
+TUTOR_REPAIR_MAX_REVISIONS  = int(os.getenv("TUTOR_REPAIR_MAX_REVISIONS",  "2"))
+TUTOR_REPAIR_MIN_CONFIDENCE = float(os.getenv("TUTOR_REPAIR_MIN_CONFIDENCE", "0.80"))
+TUTOR_REPAIR_MAX_REPEAT_ISSUES = int(os.getenv("TUTOR_REPAIR_MAX_REPEAT_ISSUES", "1"))
+
 # 评估闭环（04-eval-loop）
 EVAL_GOLDEN_PATH   = os.getenv("EVAL_GOLDEN_PATH",   "eval/golden_set.jsonl")
 SELFCHECK_SAMPLES  = int(os.getenv("SELFCHECK_SAMPLES",  "5"))

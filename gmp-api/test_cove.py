@@ -119,3 +119,30 @@ def test_cove_disabled_skips_verify(monkeypatch):
 
     node_critique(state)
     assert not called[0], "COVE_ENABLED=False 时不应调用 _cove_verify"
+
+
+def test_cove_records_source_and_effective_hashes_and_truncation():
+    context = "证" * 2100
+    draft = "答" * 1100
+    audit = {}
+
+    result = _cove_verify(
+        draft, context,
+        llm_fn=lambda prompt: ("VERIFIED", {"prompt_tokens": 12, "total_tokens": 13}),
+        audit=audit,
+    )
+
+    assert result == ""
+    assert audit["source_context_chars"] == 2100
+    assert audit["effective_context_chars"] == 2000
+    assert audit["context_truncated_chars"] == 100
+    assert audit["source_draft_chars"] == 1100
+    assert audit["effective_draft_chars"] == 1000
+    assert audit["draft_truncated_chars"] == 100
+    assert audit["source_context_sha256"] != audit["effective_context_sha256"]
+    assert audit["source_draft_sha256"] != audit["effective_draft_sha256"]
+    assert audit["raw_response"] == "VERIFIED"
+    assert audit["parsed_decision"] == "verified"
+    assert audit["usage"]["total_tokens"] == 13
+    assert audit["request_messages"]
+    assert audit["latency_ms"] >= 0
